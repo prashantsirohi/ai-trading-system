@@ -2,7 +2,7 @@
 
 - **Purpose:** Deliver pipeline artifacts to external channels (Google Sheets, Telegram, QuantStats, PDF) and write a local publish summary, with per-channel blocking semantics.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-09-23
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/publish.py`](../../src/ai_trading_system/pipeline/stages/publish.py), [`src/ai_trading_system/domains/publish/delivery_manager.py`](../../src/ai_trading_system/domains/publish/delivery_manager.py), [`src/ai_trading_system/domains/publish/channels/`](../../src/ai_trading_system/domains/publish/channels/)
 
 ---
@@ -26,6 +26,7 @@ Narrative Telegram and daily/weekly insight overlays require a `validation_repor
 - **Fundamentals fallback:** `watchlist_candidates`, `fundamental_summary`, `fundamental_scores` from `fundamentals` stage when not present. The fundamental watchlist remains a separate publish dataset and does not replace `rank.watchlist_candidates` in the daily decision banner or operator watchlist.
 - **Fundamental discovery:** optional `fundamental_thesis_universe` and `fundamental_thesis_summary` from the shadow `fundamental_discovery` stage.
 - **Shadow technical evidence:** optional `technical_evidence_labels` and `technical_evidence_cohorts` from `opportunities`. They are presentation-only inputs for the Google Sheets dashboard and retain independent `MET`, `NOT_MET`, `UNKNOWN`, and `NOT_APPLICABLE` states.
+- **Final-review pilot:** optional `final_review_list` and `final_review_summary` from the same `opportunities` attempt, enabled only with `final_review_mode=shadow`. Only `complete` or `degraded` shadow summaries with matching decision-content hashes are eligible; a failed/missing/mismatched output leaves the last good tab untouched.
 - **Events:** `market_events_snapshot`, `events_enrichment`, `events_summary`
 - **Insight/narrative:** `narrative.telegram_summary`, `insight.event_confluence`, `narrative.daily_insight_json` / `weekly_insight_json`
 - **Params:** `local_publish`, `publish_quantstats` (default `True`), `publish_weekly_pdf`, `quantstats_top_n`, `quantstats_min_overlap`, `quantstats_max_runs`, `quantstats_breadth_start_date`, `quantstats_required`, `bypass_dedupe_channels`. `smoke` is rejected ([`publish.py:74-75`](../../src/ai_trading_system/pipeline/stages/publish.py)).
@@ -40,7 +41,7 @@ Under `data/pipeline_runs/<run_id>/publish/attempt_<n>/`:
 | `watchlist_buckets` | `watchlist_buckets.csv` (Phase-5 4-bucket taxonomy) |
 
 External side effects (per channel role, see below):
-- Google Sheets operator-summary writes
+- Google Sheets operator-summary writes, including `09_Final_Review_Pilot` when the same-run final-review artifacts pass their publication gate
 - Telegram message
 - QuantStats tearsheet HTML (under `data/pipeline_runs/.../publish/.../`)
 - Weekly PDF (when enabled)
@@ -68,7 +69,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 |---|---|---|
 | `publish_of_record` | yes | `quantstats_dashboard_tearsheet` |
 | `publish_auxiliary` | yes (default for unknown channels) | none by default |
-| `publish_optional` | **no** (recorded in `non_blocking_failures`) | Google Sheets operator tabs: dashboard, watchlist, portfolio, fundamentals/raw archive if explicitly enabled, investigator, run log |
+| `publish_optional` | **no** (recorded in `non_blocking_failures`) | Google Sheets operator tabs: dashboard, final-review pilot, watchlist, portfolio, fundamentals/raw archive if explicitly enabled, investigator, run log |
 | `informational` | yes | `telegram_summary`, `weekly_pdf` |
 | `diagnostic` | yes | `local_summary` (used only when `local_publish=true`) |
 
@@ -80,7 +81,7 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 2. Require `rank.ranked_signals`. Build datasets via `build_publish_datasets`. Governed DuckDB rank and stage fields overlay the matching artifact rows, while artifact-only enrichment columns and full-universe `stock_scan` rows remain available to operator views. Rank and fundamentals both emit `watchlist_candidates`; publish resolves `rank.watchlist_candidates` for the daily banner, decision bundle, Telegram digest, and operator watchlist, and resolves `fundamentals.watchlist_candidates` separately for the fundamental lane and summary.
 3. Attach event datasets (snapshot + enrichment + summary), insight datasets (telegram summary + confluence + latest insight), shadow technical-evidence labels/cohorts, and decision bundle.
 4. Compute watchlist buckets; persist `watchlist_buckets.csv`; attach to datasets.
-5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes the compact operator workbook, including the visible `investigator` action queue, the visible `fundamental` lane, `07_Shadow_Setups`, `08_Shadow_Performance`, and hidden `_DATA_TECHNICAL_EVIDENCE`. The shadow setup view keeps fundamental, weekly-gainer, near-high, SMA20, combined-entry, SMA20-break, weekly-stage, and market-stage fields separate. It never treats `UNKNOWN` as false and grants no admission or execution authority. `01_Daily_Report` includes a compact shadow-evidence count section. Its market-breadth snapshot labels the broad-NSE scope and smoothed metrics, shows each source date and age, and calls the min/max normalization `Range Position %` rather than a statistical percentile. Allowed exposure remains numeric with three-decimal allocation precision. The `TOP RANKED` section displays the first 25 ranked rows, using the full-universe `stock_scan` to extend beyond a smaller regime-aware shortlist without changing ranking or execution policy. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
+5. Select channel handlers in `_build_handlers`. `local_publish=true` overrides to a single `local_summary` channel. Google Sheets writes the compact operator workbook, including the visible `investigator` action queue, the visible `fundamental` lane, `07_Shadow_Setups`, `08_Shadow_Performance`, and hidden `_DATA_TECHNICAL_EVIDENCE`. When enabled for a daily shadow run, `09_Final_Review_Pilot` refreshes from the same run's ordered final-review artifact. Generated columns are replaced; operator fields are restored by `(exchange, symbol)` and inactive listing annotations are retained in hidden `_DATA_FINAL_REVIEW_OPERATOR_STATE`. The top panel records run ID/date/status. The shadow setup view keeps fundamental, weekly-gainer, near-high, SMA20, combined-entry, SMA20-break, weekly-stage, and market-stage fields separate. It never treats `UNKNOWN` as false and grants no admission or execution authority. `01_Daily_Report` includes a compact shadow-evidence count section. Its market-breadth snapshot labels the broad-NSE scope and smoothed metrics, shows each source date and age, and calls the min/max normalization `Range Position %` rather than a statistical percentile. Allowed exposure remains numeric with three-decimal allocation precision. The `TOP RANKED` section displays the first 25 ranked rows, using the full-universe `stock_scan` to extend beyond a smaller regime-aware shortlist without changing ranking or execution policy. `quantstats_dashboard_tearsheet` is enabled by default; `weekly_pdf` requires `publish_weekly_pdf=true` and bypasses delivery dedup.
    Daily-summary trust fields preserve meaningful zero values and map the trust contract's `active_quarantined_symbols` count. The 50DMA/200DMA summary fields accept regime breadth only when its source date exactly matches the report run date; stale regime values remain blank rather than being presented as current.
 6. For each channel: `delivery_manager.deliver(...)` runs idempotency check, then up to `max_attempts=3` retries with exponential backoff, records every attempt in the delivery log, and returns one of `delivered` / `duplicate` / `failed`.
 7. Build `publish_summary` metadata + fundamentals adds.
@@ -98,6 +99,8 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 - **Smoke mode requested:** explicit `RuntimeError`.
 - **Channel error (blocking role):** `PublishStageError` after retries exhausted.
 - **Channel error (`publish_optional`):** recorded only.
+- **Final-review pilot source unavailable/failed/hash mismatch:** the optional pilot channel is omitted and the existing Sheet values remain unchanged; `publish_summary.json` records the source gate status.
+- **Final-review pilot sheet write/auth error:** recorded as a non-blocking Sheets delivery failure; the source CSV/summary remain authoritative.
 - **Telegram precheck failure:** raised with `precheck=<kind>` detail; blocking (`informational` role).
 - **Sheets auth expiry:** OAuth refresh handled by `google_sheets_manager`; persistent failure is recorded as a non-blocking publish failure.
 - **EmptyDataError on CSV artifact with non-zero expected rows:** raises `PublishStageError` ([`publish.py:317-322`](../../src/ai_trading_system/pipeline/stages/publish.py)).
@@ -118,6 +121,9 @@ From [`publish.py:30-61`](../../src/ai_trading_system/pipeline/stages/publish.py
 ```bash
 # Full pipeline (publishes to all enabled channels)
 ai-trading-pipeline
+
+# Daily shadow pipeline (also refreshes 09_Final_Review_Pilot from this run)
+./scripts/run_daily_shadow.sh
 
 # Local-only run (skips external channels, writes watchlist_digest.md + local_summary)
 ai-trading-pipeline --local-publish

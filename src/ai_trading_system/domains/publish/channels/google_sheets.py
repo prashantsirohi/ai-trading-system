@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from urllib.parse import quote
 from typing import Optional
 
 import pandas as pd
@@ -29,6 +30,27 @@ RAW_FUNDAMENTAL_WATCHLIST_SHEET = "_RAW_Fundamental_Watchlist"
 VISIBLE_SHEET_MAX_ROWS = 60
 VISIBLE_SHEET_MAX_COLS = 14
 FINAL_3Q_GATE_SHEET = "Final 3Q Gate"
+FINAL_REVIEW_PILOT_SHEET = "09_Final_Review_Pilot"
+FINAL_REVIEW_STATE_SHEET = "_DATA_FINAL_REVIEW_OPERATOR_STATE"
+FINAL_REVIEW_PILOT_HEADERS = (
+    "Priority", "Symbol", "Exchange", "Stage", "Transition", "Readiness", "Lane",
+    "Pattern", "Pattern State", "Fundamental State", "Thesis", "Rank Score", "Trigger",
+    "Invalidation", "Extension %", "Blockers / Next Check", "Position", "Evidence Session",
+    "Run ID", "Policy", "Research Status", "Research Tool", "Research Notes / Prompt",
+    "Screener", "TradingView", "Chartink", "Valuation Comfort", "Forward EPS View",
+    "Zerodha Watchlist", "Price Action", "Operator Decision", "Next Review Condition",
+    "Operator Notes",
+)
+_FINAL_REVIEW_MANUAL_HEADERS = (
+    "Research Status", "Research Tool", "Research Notes / Prompt", "Valuation Comfort",
+    "Forward EPS View", "Zerodha Watchlist", "Price Action", "Operator Decision",
+    "Next Review Condition", "Operator Notes",
+)
+_FINAL_REVIEW_STATE_HEADERS = ("Exchange", "Symbol", *_FINAL_REVIEW_MANUAL_HEADERS)
+_FINAL_REVIEW_MANUAL_DEFAULTS = (
+    "NOT_STARTED", "", "", "UNKNOWN", "UNKNOWN", "NO", "UNKNOWN", "",
+    "Validate technical setup, valuation comfort, and forward EPS before entry consideration", "",
+)
 OPERATOR_TAB_ORDER = [
     "01_Daily_Report",
     PORTFOLIO_SHEET,
@@ -271,6 +293,209 @@ def publish_investigator(sheets: dict[str, pd.DataFrame]) -> bool:
         manager.apply_number_formats(sheet_name, _INVESTIGATOR_FORMATS)
     logger.info("Investigator sheets updated (%s tabs)", len(sheets))
     return True
+
+
+def publish_final_review_pilot(
+    review_rows: pd.DataFrame,
+    summary: dict[str, object],
+    *,
+    run_id: str,
+    run_date: str,
+) -> dict[str, object]:
+    """Refresh the shadow final-review tab while retaining operator inputs by listing identity."""
+    spreadsheet_id = _require_spreadsheet_id()
+    if not spreadsheet_id:
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+    sheet = manager.get_worksheet(FINAL_REVIEW_PILOT_SHEET)
+    if sheet is None:
+        raise RuntimeError(f"Required pilot tab '{FINAL_REVIEW_PILOT_SHEET}' is missing")
+
+    existing = manager._execute_with_backoff(lambda: sheet.get_all_values())
+    header = tuple((existing[4] if len(existing) > 4 else [])[: len(FINAL_REVIEW_PILOT_HEADERS)])
+    if header != FINAL_REVIEW_PILOT_HEADERS:
+        raise RuntimeError(f"Unexpected header layout in '{FINAL_REVIEW_PILOT_SHEET}'; refusing to overwrite it")
+
+    manual_index = {name: FINAL_REVIEW_PILOT_HEADERS.index(name) for name in _FINAL_REVIEW_MANUAL_HEADERS}
+    operator_state: dict[tuple[str, str], tuple[str, ...]] = {}
+
+    def remember(
+        exchange: object,
+        symbol: object,
+        values: list[str],
+        positions: list[int],
+        *,
+        overwrite: bool = True,
+    ) -> None:
+        key = (str(exchange or "").strip().upper(), str(symbol or "").strip().upper())
+        if not key[0] or not key[1]:
+            return
+        if not overwrite and key in operator_state:
+            return
+        state = tuple(values[index] if index < len(values) else "" for index in positions)
+        operator_state[key] = state
+
+    manual_positions = [manual_index[name] for name in _FINAL_REVIEW_MANUAL_HEADERS]
+    for values in existing[5:]:
+        remember(
+            values[2] if len(values) > 2 else "",
+            values[1] if len(values) > 1 else "",
+            values,
+            manual_positions,
+        )
+
+    worksheet_names = manager.list_worksheets()
+    state_sheet = None
+    if FINAL_REVIEW_STATE_SHEET in worksheet_names:
+        state_sheet = manager.get_worksheet(FINAL_REVIEW_STATE_SHEET)
+    if state_sheet is not None:
+        archived = manager._execute_with_backoff(lambda: state_sheet.get_all_values())
+        state_header = tuple(archived[0][: len(_FINAL_REVIEW_STATE_HEADERS)]) if archived else ()
+        if state_header != _FINAL_REVIEW_STATE_HEADERS:
+            raise RuntimeError(f"Unexpected header layout in '{FINAL_REVIEW_STATE_SHEET}'; refusing to overwrite it")
+        for values in archived[1:]:
+            remember(
+                values[0] if values else "",
+                values[1] if len(values) > 1 else "",
+                values,
+                list(range(2, len(_FINAL_REVIEW_STATE_HEADERS))),
+                overwrite=False,
+            )
+
+    active_rows: list[list[object]] = []
+    active_keys: set[tuple[str, str]] = set()
+    for _, source in review_rows.iterrows():
+        row = source.to_dict()
+        exchange = str(row.get("exchange") or "").strip().upper()
+        symbol = str(row.get("symbol") or "").strip().upper()
+        key = (exchange, symbol)
+        if not exchange or not symbol:
+            raise ValueError("Final-review output contains a row without exchange/symbol identity")
+        if key in active_keys:
+            raise ValueError(f"Final-review output contains duplicate listing identity {exchange}:{symbol}")
+        active_keys.add(key)
+        saved = operator_state.get(key, _FINAL_REVIEW_MANUAL_DEFAULTS)
+        pattern_details = _json_values(row.get("pattern_details_json"))
+        patterns = ", ".join(dict.fromkeys(
+            str(item.get("family") or "").strip()
+            for item in pattern_details
+            if isinstance(item, dict) and str(item.get("family") or "").strip()
+        ))
+        blockers = []
+        for field in ("reasons_json", "adapter_reasons_json"):
+            blockers.extend(_json_strings(row.get(field)))
+        position_ids = _json_strings(row.get("position_cycle_ids_json"))
+        encoded_symbol = quote(symbol, safe=".-_")
+        values = [
+            row.get("review_priority"), symbol, exchange, row.get("stage"), row.get("transition"),
+            row.get("readiness"), row.get("combination"), patterns, row.get("pattern_state"),
+            row.get("fundamental_state"), row.get("fundamental_thesis"), row.get("rank_score"),
+            row.get("trigger"), row.get("invalidation"), row.get("extension_pct"),
+            " • ".join(dict.fromkeys(blockers)), " • ".join(position_ids) if position_ids else "NONE",
+            row.get("session"), run_id, row.get("adapter_policy_version") or row.get("policy_version"),
+            saved[0], saved[1], saved[2],
+            f'=HYPERLINK("https://www.screener.in/company/{encoded_symbol}/consolidated/","Open")',
+            f'=HYPERLINK("https://www.tradingview.com/chart/?symbol={quote(exchange + ":" + symbol, safe=":.-_")}","Open")',
+            f'=HYPERLINK("https://chartink.com/stocks/{encoded_symbol.lower()}.html","Open")',
+            *saved[3:],
+        ]
+        active_rows.append(values)
+
+    archived_rows = [
+        [exchange, symbol, *state]
+        for (exchange, symbol), state in sorted(operator_state.items())
+        if (exchange, symbol) not in active_keys
+        and state != _FINAL_REVIEW_MANUAL_DEFAULTS
+    ]
+    archive_exists = FINAL_REVIEW_STATE_SHEET in worksheet_names
+    if archived_rows or archive_exists:
+        archive_frame = pd.DataFrame(archived_rows, columns=_FINAL_REVIEW_STATE_HEADERS)
+        archive_sheet = manager.get_or_create_sheet(
+            FINAL_REVIEW_STATE_SHEET,
+            rows=max(6, len(archive_frame) + 5),
+            cols=len(_FINAL_REVIEW_STATE_HEADERS),
+        )
+        if archive_sheet is None:
+            raise RuntimeError(f"Could not open operator review state: {manager.last_error or 'unknown error'}")
+        if archive_sheet.row_count < len(archive_frame) + 1 or archive_sheet.col_count < len(_FINAL_REVIEW_STATE_HEADERS):
+            manager._execute_with_backoff(
+                lambda: archive_sheet.resize(
+                    rows=max(len(archive_frame) + 5, archive_sheet.row_count),
+                    cols=max(len(_FINAL_REVIEW_STATE_HEADERS), archive_sheet.col_count),
+                ),
+                is_write=True,
+            )
+        if not manager.write_hidden_data_sheet(
+            FINAL_REVIEW_STATE_SHEET,
+            archive_frame,
+            max_rows=max(1, len(archive_frame)),
+            max_cols=len(_FINAL_REVIEW_STATE_HEADERS),
+        ):
+            raise RuntimeError(f"Could not persist inactive operator review fields: {manager.last_error or 'unknown error'}")
+
+    required_rows = max(60, len(active_rows) + 5)
+    if sheet.row_count < required_rows or sheet.col_count < len(FINAL_REVIEW_PILOT_HEADERS):
+        manager._execute_with_backoff(
+            lambda: sheet.resize(
+                rows=max(required_rows, sheet.row_count),
+                cols=max(len(FINAL_REVIEW_PILOT_HEADERS), sheet.col_count),
+            ),
+            is_write=True,
+        )
+
+    if len(active_rows) > 1:
+        requests = []
+        for start_col, end_col in ((0, len(FINAL_REVIEW_PILOT_HEADERS)),):
+            for paste_type in ("PASTE_FORMAT", "PASTE_DATA_VALIDATION"):
+                requests.append({"copyPaste": {
+                    "source": {"sheetId": int(sheet.id), "startRowIndex": 5, "endRowIndex": 6,
+                               "startColumnIndex": start_col, "endColumnIndex": end_col},
+                    "destination": {"sheetId": int(sheet.id), "startRowIndex": 6,
+                                    "endRowIndex": 5 + len(active_rows),
+                                    "startColumnIndex": start_col, "endColumnIndex": end_col},
+                    "pasteType": paste_type,
+                    "pasteOrientation": "NORMAL",
+                }})
+        manager.batch_update({"requests": requests})
+
+    top_rows = [
+        [f"Final Review Pilot — {run_date}"],
+        [f"Run: {run_id} • Output: {str(summary.get('status') or '').upper()} • {len(active_rows)} selected reviews • Policy: {summary.get('policy_snapshot', {}).get('version', 'final-review-adapter-v2')}"],
+        ["Auto-refreshed from this run's shadow final-review output. Operator fields persist by exchange and symbol. Shadow evidence only; execution controls remain separate."],
+    ]
+    manager.update_worksheet_values(sheet, top_rows, range_name="A1:A3")
+    if active_rows:
+        manager.update_worksheet_values(sheet, active_rows, range_name=f"A6:AG{5 + len(active_rows)}")
+    old_data_rows = max(0, len(existing) - 5)
+    if old_data_rows > len(active_rows):
+        start = 6 + len(active_rows)
+        end = 5 + old_data_rows
+        manager._execute_with_backoff(
+            lambda: sheet.batch_clear([f"A{start}:AG{end}"]),
+            is_write=True,
+        )
+
+    return {
+        "report_id": "final_review_pilot",
+        "rows_written": len(active_rows),
+        "operator_state_archived": len(archived_rows),
+        **manager.quota_metadata(),
+    }
+
+
+def _json_values(value: object) -> list[object]:
+    try:
+        parsed = json.loads(str(value)) if value is not None else []
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_strings(value: object) -> list[str]:
+    return list(dict.fromkeys(str(item).strip() for item in _json_values(value) if str(item).strip()))
 
 
 def _fundamental_watchlist_frame(watchlist: pd.DataFrame) -> pd.DataFrame:

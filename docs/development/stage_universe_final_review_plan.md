@@ -2,9 +2,9 @@
 
 - **Purpose:** Plan a Stage 2 plus late Stage 1 review universe, independent pattern/fundamental qualification, and one ordered daily review list.
 - **Audience:** Operator, ranking/opportunity engineers, and publish maintainers.
-- **Last verified:** 2026-09-19
+- **Last verified:** 2026-09-23
 - **Source of truth:** This document owns the proposed delivery backlog only. Current behavior remains in the [System Guide](../SYSTEM_GUIDE.md), [pattern lane contract](../stages/pattern_lane_scan.md), and [fundamental discovery contract](../stages/fundamental_discovery.md).
-- **Status:** U1/U2 implemented; U3 accepted for an NSE shadow pilot; U4 external pilot published and awaiting five operator reviews; U5 not started. No ranking, lifecycle or execution authority transferred.
+- **Status:** U1/U2 implemented; U3 accepted for an NSE shadow pilot; U4 Sheets refresh is wired and awaits the next eligible run plus five operator reviews; U5 not started. No ranking, lifecycle or execution authority transferred.
 
 ## Intended result and scope
 
@@ -104,7 +104,7 @@ numeric thresholds receive a separate policy contract.
 
 ## Delivery sequence and acceptance gates
 
-U1 and U2 are implemented. U3 copied-real validation is **ACCEPTED FOR THE NSE SHADOW PILOT** after official-source calendar repair and a complete same-run rebuild; BSE calendar support remains explicit and unsupported. U4 is **IN PROGRESS**: the 52-row, 33-column `09_Final_Review_Pilot` tab was published to `Stock_Analysis` on 2026-09-19 and the operator trial is 0/5. U5 remains **NOT STARTED**. See the [U2/U3 evidence record](u2_u3_final_review_validation.md). U-prefix steps are subordinate to the existing M1–M4 program, not replacement milestones.
+U1 and U2 are implemented. U3 copied-real validation is **ACCEPTED FOR THE NSE SHADOW PILOT** after official-source calendar repair and a complete same-run rebuild; BSE calendar support remains explicit and unsupported. U4 is **IN PROGRESS**: the `09_Final_Review_Pilot` tab was published to `Stock_Analysis` on 2026-09-19 and the publisher now refreshes it from eligible same-run artifacts. The operator trial remains 0/5 pending actual reviews. U5 remains **NOT STARTED**. See the [U2/U3 evidence record](u2_u3_final_review_validation.md). U-prefix steps are subordinate to the existing M1–M4 program, not replacement milestones.
 
 | Step | Work and responsible module | Completion evidence |
 |---|---|---|
@@ -134,7 +134,7 @@ Local artifacts come first, followed by a shadow Sheets tab, followed by an expl
 
 No feature rebuild is required for this documentation change. The proposed first implementation should reuse existing features and scores; U1 must identify any absent inputs. If new formulas or factor weights become necessary, record their rebuild scope separately before implementation. Do not claim a full rebuild is unnecessary for an as-yet-undefined ranking change.
 
-The next work is five completed U4 operator sessions in the published external Sheets pilot, recorded against the M1 baseline fields. No runtime default, lifecycle authority, execution permission, recurring Sheets publisher, or Telegram delivery has changed.
+The next work is a daily shadow pipeline run to refresh the tab, followed by five completed U4 operator sessions recorded against the M1 baseline fields. No ranking default, lifecycle authority, execution permission, or Telegram delivery has changed.
 
 ## U1 implementation — 2026-09-13
 

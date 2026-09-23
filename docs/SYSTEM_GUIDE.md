@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-09-19
+- **Last verified:** 2026-09-23
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -460,7 +460,7 @@ remain keyed by the mastered symbol.
 | `execute` | Apply trust, policy, portfolio, and risk gates before paper or authorized live dispatch. | Actions, orders, fills, positions | [execute](stages/execute.md) |
 | `insight` | Build the structured analyst brief from upstream evidence. | `market_insight.json` | [insight](stages/insight.md) |
 | `narrative` | Render the configured market narrative at the cadence set by `--insight-report-type` (`daily` default, or `weekly`). | `market_report.json` | [narrative](stages/narrative.md) |
-| `publish` | Deliver already-materialized outputs to configured channels, including the top 25 ranked rows, Investigator and fundamental lanes, and presentation-only shadow technical setup/performance tabs in the Google Sheets operator workbook. | Delivery records and publish summary | [publish](stages/publish.md) |
+| `publish` | Deliver already-materialized outputs to configured channels, including the top 25 ranked rows, Investigator and fundamental lanes, presentation-only shadow technical setup/performance tabs, and the gated final-review pilot list in the Google Sheets operator workbook. | Delivery records and publish summary | [publish](stages/publish.md) |
 | `perf_tracker` | Mature forward-return cohorts in the research domain. | Research performance rows | [performance tracker](stages/perf_tracker.md) |
 
 ### Feature substages
@@ -1058,10 +1058,11 @@ Existing rank, lifecycle, execution and publisher consumers remain unchanged.
 [U2/U3 validation](development/u2_u3_final_review_validation.md) records the
 official-source calendar repair, a complete same-run lane rebuild, and byte-identical
 copied replays. U3 is accepted for an NSE shadow pilot with BSE calendar support
-still explicit and unsupported. On 2026-09-19 the 52-row U4 pilot was added as
-`09_Final_Review_Pilot` in the operator's `Stock_Analysis` workbook. It is a
-manually published shadow view with research handoff and operator-decision
-fields; no recurring publisher or Telegram consumer was added.
+still explicit and unsupported. The 52-row U4 pilot lives in
+`09_Final_Review_Pilot` in the operator's `Stock_Analysis` workbook. Daily
+shadow runs now refresh it from that run's completed final-review artifacts;
+operator fields follow exchange/symbol identity and remain shadow-only. No
+Telegram consumer was added.
 The operator accepted the M1 risk-first queue meanings and froze the M2 primary
 comparison on 2026-09-19. G1 remains open because all generated human-review forms
 are blank; G2 remains open pending reconciled, matured market evidence.

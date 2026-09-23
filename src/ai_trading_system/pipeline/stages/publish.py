@@ -87,6 +87,7 @@ class PublishStage:
         "google_sheets_investigator": "publish_optional",
         "google_sheets_fundamental_watchlist": "publish_optional",
         "google_sheets_dashboard": "publish_optional",
+        "google_sheets_final_review_pilot": "publish_optional",
         "google_sheets_publish_log": "publish_optional",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
@@ -170,6 +171,7 @@ class PublishStage:
         self._attach_investigator_datasets(context, datasets)
         self._attach_fundamental_discovery_datasets(context, datasets)
         self._attach_technical_evidence_datasets(context, datasets)
+        self._attach_final_review_pilot_data(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -203,7 +205,10 @@ class PublishStage:
                 "channel_input_hashes": {
                     "google_sheets_dashboard": list(
                         datasets.get("technical_evidence_artifact_hashes") or []
-                    )
+                    ),
+                    "google_sheets_final_review_pilot": list(
+                        datasets.get("final_review_pilot_source_hashes") or []
+                    ),
                 },
             },
             attempt_number=rank_artifact.attempt_number,
@@ -269,6 +274,16 @@ class PublishStage:
         metadata["retry_recommended_after_seconds"] = retry_recommended_after_seconds
         metadata["sheets_requests_attempted"] = int(sheets_requests_attempted)
         metadata["sheets_rows_written"] = int(sheets_rows_written)
+        pilot_state = datasets.get("final_review_pilot_state")
+        if isinstance(pilot_state, dict):
+            pilot_delivery = next(
+                (target for target in targets if target.get("channel") == "google_sheets_final_review_pilot"),
+                None,
+            )
+            metadata["final_review_pilot"] = {
+                **pilot_state,
+                "delivery_status": pilot_delivery.get("status") if pilot_delivery else "skipped",
+            }
         if google_sheets_errors:
             metadata["google_sheets_errors"] = google_sheets_errors
         if fallback_fundamental_artifacts:
@@ -506,6 +521,60 @@ class PublishStage:
                 hashes.append(str(artifact.content_hash))
         datasets["technical_evidence_artifact_hashes"] = sorted(set(hashes))
 
+    def _attach_final_review_pilot_data(
+        self,
+        context: StageContext,
+        datasets: Dict[str, Any],
+    ) -> None:
+        state: dict[str, Any] = {"status": "disabled"}
+        datasets["final_review_pilot_state"] = state
+        if context.params.get("final_review_mode", "off") != "shadow":
+            return
+
+        list_artifact = context.artifact_for("opportunities", "final_review_list")
+        summary_artifact = context.artifact_for("opportunities", "final_review_summary")
+        if list_artifact is None or summary_artifact is None:
+            state.update({"status": "not_available", "reason": "same-run final-review artifacts are missing"})
+            return
+
+        summary = self._read_json_artifact_safe(summary_artifact)
+        source_status = str(summary.get("status") or "").lower()
+        if not summary or summary.get("shadow_only") is not True:
+            state.update({"status": "not_published", "reason": "final-review summary is missing or is not shadow-only"})
+            return
+        if source_status not in {"complete", "degraded"}:
+            state.update({"status": "not_published", "source_status": source_status or "unknown", "reason": "final-review output did not pass its publication gate"})
+            return
+
+        summary_hash = str(summary.get("decision_content_hash") or "")
+        artifact_hash = str((list_artifact.metadata or {}).get("decision_content_hash") or "")
+        if not summary_hash or summary_hash != artifact_hash:
+            state.update({"status": "not_published", "source_status": source_status, "reason": "list and summary decision hashes do not match"})
+            return
+
+        try:
+            frame = self._read_artifact(list_artifact)
+        except Exception as exc:
+            state.update({"status": "not_published", "source_status": source_status, "reason": f"could not read final-review list: {type(exc).__name__}"})
+            return
+        if list_artifact.row_count is not None and len(frame) != int(list_artifact.row_count):
+            state.update({"status": "not_published", "source_status": source_status, "reason": "final-review list row count does not match registered artifact"})
+            return
+
+        datasets["final_review_pilot_rows"] = frame
+        datasets["final_review_pilot_summary"] = summary
+        datasets["final_review_pilot_ready"] = True
+        datasets["final_review_pilot_source_hashes"] = sorted(
+            {str(value) for value in (list_artifact.content_hash, summary_artifact.content_hash) if value}
+        )
+        state.update({
+            "status": "ready",
+            "source_status": source_status,
+            "ordered_rows": len(frame),
+            "decision_content_hash": summary_hash,
+            "source_run_id": context.run_id,
+        })
+
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
             return {}
@@ -657,6 +726,8 @@ class PublishStage:
         }
         if datasets.get("dashboard_payload") or not datasets.get("ranked_signals", pd.DataFrame()).empty:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
+        if datasets.get("final_review_pilot_ready") is True:
+            handlers["google_sheets_final_review_pilot"] = self._publish_final_review_pilot
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
@@ -712,6 +783,24 @@ class PublishStage:
             "trust_status": datasets.get("publish_trust_status", "unknown"),
             "watchlist_digest": str(watchlist_path),
         }
+
+    def _publish_final_review_pilot(
+        self,
+        context: StageContext,
+        rank_artifact: StageArtifact,
+        datasets: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_final_review_pilot
+
+        result = publish_final_review_pilot(
+            datasets.get("final_review_pilot_rows", pd.DataFrame()),
+            datasets.get("final_review_pilot_summary", {}),
+            run_id=context.run_id,
+            run_date=context.run_date,
+        )
+        if not result:
+            raise RuntimeError("final-review pilot publish returned no delivery result")
+        return result
 
     def _publish_stock_scan(
         self,

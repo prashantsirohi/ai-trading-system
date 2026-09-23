@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the proposed decision owners, delivery sequence, and acceptance gates for consolidating Phase 3.5 into a coherent operator workflow.
 - **Audience:** Operator, implementing engineers, and reviewers.
-- **Last verified:** 2026-09-19
+- **Last verified:** 2026-09-23
 - **Source of truth:** Current boundaries in [System Guide](../SYSTEM_GUIDE.md), [opportunity registry](../architecture/opportunity_registry.md), [candidate tracker](../stages/candidate_tracker.md), and [decision read-model migration](../architecture/decision_read_model_migration.md). This document owns the proposed consolidation backlog only.
 - **Status:** M1 queue meanings/workflow and the M2 primary comparison were accepted on 2026-09-19. G1 and G2 remain open pending human baseline and market evidence. This document does not change runtime authority, deployment readiness, or execution permissions.
 
@@ -116,7 +116,7 @@ Do not fabricate pre-cutover lifecycle events. Use an explicit legacy reference 
 
 ## Delivery order and evidence of completion
 
-M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3/M4 remain **NOT STARTED** as formal milestones. The 52-row U4 shadow pilot is now published in Sheets for the five-session trial. No acceptance gate has passed.
+M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3/M4 remain **NOT STARTED** as formal milestones. The U4 Sheets tab is wired to refresh from eligible same-run shadow artifacts and awaits the next pipeline run and five operator sessions. No acceptance gate has passed.
 
 | Work item | Dependency | Completion evidence |
 |---|---|---|
@@ -212,5 +212,6 @@ U1 pure policy implementation is recorded in the
 NSE shadow pilot after official-source calendar repair and a complete same-run
 lane rebuild; BSE calendar support remains explicit and unsupported. U4's
 `09_Final_Review_Pilot` tab was added to the external `Stock_Analysis` workbook
-on 2026-09-19 and awaits five operator sessions. This proposal preserves upstream rank,
+on 2026-09-19 and is now wired to refresh on eligible daily shadow runs; five
+operator sessions remain outstanding. This proposal preserves upstream rank,
 operational selection and lifecycle ownership; G1/G2 remain open.

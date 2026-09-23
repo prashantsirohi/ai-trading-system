@@ -2,13 +2,13 @@
 
 - **Purpose:** Record the final-review adapter contract, reproducible validation and remaining acceptance evidence.
 - **Audience:** Opportunity and publishing maintainers; operator.
-- **Last verified:** 2026-09-19
+- **Last verified:** 2026-09-23
 - **Source of truth:** `domains/opportunities/review_sources.py`, `review_projection.py`, `pipeline/stages/final_review.py`, `interfaces/cli/replay_final_review.py` under `src/ai_trading_system/`, their targeted tests, and the captured validation bundle described below.
 - **Status:** U2 implemented; U3 accepted for the NSE shadow pilot. The U4 external Sheets pilot is published and awaiting five completed operator reviews. U5 not started. M1/G1 and M2/G2 remain open.
 
 ## Implemented boundary
 
-The [U1 policy](u1_review_policy_contract.md) now has a read-only source adapter and an optional artifact materializer inside `opportunities`, after both lanes. The orchestrator's `--final-review-mode shadow` requires registry shadow; its default is `off`. The daily shadow wrapper enables it. Existing ranking, candidate lifecycle, position management and publisher ownership are unchanged. The first pilot was copied manually into the operator workbook; no runtime Sheets or Telegram consumer has been added.
+The [U1 policy](u1_review_policy_contract.md) now has a read-only source adapter and an optional artifact materializer inside `opportunities`, after both lanes. The orchestrator's `--final-review-mode shadow` requires registry shadow; its default is `off`. The daily shadow wrapper enables it. `publish` now sends the same-run final-review list to `09_Final_Review_Pilot` only when the summary is `complete` or `degraded`, is explicitly shadow-only, and its decision hash matches the list artifact. It refreshes generated cells while carrying operator fields by `(exchange, symbol)` and retains inactive annotations in hidden `_DATA_FINAL_REVIEW_OPERATOR_STATE`. Missing, failed, or mismatched final-review output does not clear the last good tab. Existing ranking, candidate lifecycle, position management and execution ownership are unchanged; no Telegram consumer has been added.
 
 The source adapter requires completed, promoted producer attempts, verifies SHA-256 and registered row counts, preserves producer run/attempt identity and rejects availability after the explicit cutoff. It uses full `ranked_universe`, governed weekly stages, pattern assessments plus exact signal links, fundamental thesis projections and registered router position coverage. Stage reconciliation uses correction-aware history. Missing or invalid evidence remains visible; a later run's fundamental repair is not silently joined to an earlier run's pattern output.
 
@@ -54,8 +54,8 @@ After inserting the two official index rows into the isolated copy, the calendar
 
 1. BSE calendar validation remains unsupported, so the combined-exchange summary remains degraded and BSE exceptions must stay visible.
 2. The real selected cohort contains no F-only or P+F rows. Those policy paths remain covered by contract tests but need future real cohorts before adoption claims.
-3. The U4 local workbook `Final_Review_Pilot_2026-09-11.xlsx` contains the 52 verified rows and operator-status fields. Its 33-column `09_Final_Review_Pilot` tab was added to the external `Stock_Analysis` workbook on 2026-09-19 with frozen identity columns, filters, research links, operator dropdowns and shadow warnings. This was a one-time authorized write, not a recurring publisher.
-4. U4 still requires five completed operator reviews against the M1 baseline. The trial is 0/5 at publication. U5 adoption remains gated by M2/G2 measurement.
+3. The 33-column `09_Final_Review_Pilot` tab in `Stock_Analysis` was initially populated on 2026-09-19 with 52 verified rows, frozen identity columns, filters, research links, operator dropdowns and shadow warnings. Pipeline refresh is now wired for eligible daily shadow runs. The tab currently remains at its last published run until the next successful eligible pipeline execution.
+4. U4 still requires five completed operator reviews against the M1 baseline. The trial was 0/5 at initial publication; no new operator session is inferred from this code change. U5 adoption remains gated by M2/G2 measurement.
 
 No persisted feature rebuild or database migration is required. The full copied run regenerated affected producer artifacts; future daily runs use adapter v2 and exact-date index archive ingest. Existing primary rank and publishers remain in place.
 
