@@ -606,7 +606,11 @@ class RegistryStore:
 
     @contextmanager
     def _reader(self) -> Iterable[duckdb.DuckDBPyConnection]:
-        conn = self._connect(read_only=True)
+        # DuckDB requires every connection to the same file in one process to
+        # use the same configuration. Pipeline stages can read while another
+        # stage holds a control-plane writer, so use the writer configuration
+        # here; callers of this context only issue reads.
+        conn = self._connect(read_only=False)
         try:
             yield conn
         finally:

@@ -545,6 +545,10 @@ class PublishStage:
         if source_status not in {"complete", "degraded"}:
             state.update({"status": "not_published", "source_status": source_status or "unknown", "reason": "final-review output did not pass its publication gate"})
             return
+        calendar_status = str((summary.get("calendar") or {}).get("status") or "").upper()
+        if calendar_status == "FAILED":
+            state.update({"status": "not_published", "source_status": source_status, "reason": "final-review decision session has no verified market calendar"})
+            return
 
         summary_hash = str(summary.get("decision_content_hash") or "")
         artifact_hash = str((list_artifact.metadata or {}).get("decision_content_hash") or "")

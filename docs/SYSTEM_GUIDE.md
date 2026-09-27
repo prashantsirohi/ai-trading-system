@@ -1061,7 +1061,8 @@ copied replays. U3 is accepted for an NSE shadow pilot with BSE calendar support
 still explicit and unsupported. The 52-row U4 pilot lives in
 `09_Final_Review_Pilot` in the operator's `Stock_Analysis` workbook. Daily
 shadow runs now refresh it from that run's completed final-review artifacts;
-operator fields follow exchange/symbol identity and remain shadow-only. No
+publish skips a review whose decision-session calendar failed, preserving the
+last good tab. Operator fields follow exchange/symbol identity and remain shadow-only. No
 Telegram consumer was added.
 The operator accepted the M1 risk-first queue meanings and froze the M2 primary
 comparison on 2026-09-19. G1 remains open because all generated human-review forms
