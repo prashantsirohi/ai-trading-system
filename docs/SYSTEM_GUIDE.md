@@ -398,15 +398,15 @@ Execution exit counters persist at most once per decision date; previews and dis
 
 ## Operational design and stages
 
-<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,pattern_lane_scan,scan_router,investigator,fundamentals,fundamental_discovery,opportunities,candidates,candidate_tracker,events,execute,insight,narrative,publish,perf_tracker -->
+<!-- system-guide-logical-stages: ingest,features,rank,weekly_stage,pattern_lane_scan,scan_router,investigator,fundamentals,fundamental_discovery,opportunities,candidates,candidate_tracker,events,execute,insight,narrative,daily_review,publish,perf_tracker -->
 
 ```text
 ingest -> features -> rank -> weekly_stage* -> pattern_lane_scan* -> scan_router* -> investigator -> fundamentals* -> fundamental_discovery* -> opportunities* -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
-       -> publish -> perf_tracker
+       -> daily_review* -> publish -> perf_tracker
 ```
 
-`PIPELINE_ORDER` contains all 18 logical stages above. The current CLI default omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `fundamental_discovery`, `opportunities`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. `--fundamental-discovery-mode compare|shadow` inserts `fundamental_discovery` after `fundamentals`; `shadow` makes its qualified rows available to registry shadow while `compare` never writes the registry. Phase 3B and pattern modes retain their documented insertions. Registry shadow inserts `opportunities` after `fundamental_discovery` when present, otherwise after `fundamentals`. Canary mode replaces the unchanged default with `ingest,features,rank`.
+`PIPELINE_ORDER` contains all 19 logical stages above. The current CLI default omits `weekly_stage`, `pattern_lane_scan`, `scan_router`, `fundamental_discovery`, `opportunities`, `daily_review`, and `narrative`, so its normal stage list remains `ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker`. `--fundamental-discovery-mode compare|shadow` inserts `fundamental_discovery` after `fundamentals`; `shadow` makes its qualified rows available to registry shadow while `compare` never writes the registry. Phase 3B and pattern modes retain their documented insertions. Registry shadow inserts `opportunities` after `fundamental_discovery` when present, otherwise after `fundamentals`. Canary mode replaces the unchanged default with `ingest,features,rank`.
 
 Fundamental discovery rule policy `fundamental-thesis-rules-v1.1` treats numeric
 and textual boolean encodings consistently. A security is blocked as
@@ -467,6 +467,7 @@ remain keyed by the mastered symbol.
 | `execute` | Apply trust, policy, portfolio, and risk gates before paper or authorized live dispatch. | Actions, orders, fills, positions | [execute](stages/execute.md) |
 | `insight` | Build the structured analyst brief from upstream evidence. | `market_insight.json` | [insight](stages/insight.md) |
 | `narrative` | Render the configured market narrative at the cadence set by `--insight-report-type` (`daily` default, or `weekly`). | `market_report.json` | [narrative](stages/narrative.md) |
+| `daily_review` | Optionally consolidate independent lane, tracker and post-execution paper-position evidence into one shadow attention list. | Daily list, changes and coverage summary | [daily review](stages/daily_review.md) |
 | `publish` | Deliver already-materialized outputs to configured channels, including the top 25 ranked rows, Investigator and fundamental lanes, presentation-only shadow technical setup/performance tabs, and the gated final-review pilot list in the Google Sheets operator workbook. | Delivery records and publish summary | [publish](stages/publish.md) |
 | `perf_tracker` | Mature forward-return cohorts in the research domain. | Research performance rows | [performance tracker](stages/perf_tracker.md) |
 
@@ -1053,6 +1054,20 @@ completion and the shadow session gate remain separate from human review.
 See [commands](reference/commands.md#operational-pipeline) for the form location
 and [baseline protocol](development/m1_decision_ownership_audit.md#five-session-baseline-protocol)
 for definitions.
+
+The daily shadow wrapper also enables `--daily-review-mode shadow`, inserting
+`daily_review` immediately before `publish`. It consumes completed/promoted,
+hash-verified same-run artifacts and writes `daily_review_list.csv`,
+`daily_review_changes.csv`, and `daily_review_summary.json`. One listing row
+retains independent lane/episode details, Final Review selection and priority,
+tracker state, and post-execution paper-position scope. The optional
+`00_Daily_Review_Pilot` Sheets front page preserves annotations by exchange/symbol;
+its full hidden data and change log are untruncated. Failed/calendar-invalid
+packs preserve the last successful tab with its original session label.
+The CLI default is off; append `--daily-review-mode off` to the wrapper to disable
+this pilot. Disabling Final Review also requires disabling daily review.
+No rank, admission, lifecycle, execution or broker authority changes. See the
+[daily review contract](stages/daily_review.md).
 
 ## Where to go deeper
 

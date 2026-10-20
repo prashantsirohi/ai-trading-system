@@ -2,7 +2,7 @@
 
 - **Purpose:** Deliver pipeline artifacts to external channels (Google Sheets, Telegram, QuantStats, PDF) and write a local publish summary, with per-channel blocking semantics.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-23
+- **Last verified:** 2026-10-20
 - **Source of truth:** [`src/ai_trading_system/pipeline/stages/publish.py`](../../src/ai_trading_system/pipeline/stages/publish.py), [`src/ai_trading_system/domains/publish/delivery_manager.py`](../../src/ai_trading_system/domains/publish/delivery_manager.py), [`src/ai_trading_system/domains/publish/channels/`](../../src/ai_trading_system/domains/publish/channels/)
 
 ---
@@ -137,3 +137,15 @@ ai-trading-pipeline --bypass-dedupe-channels google_sheets_dashboard
 # Inspect publish summary
 jq '.targets[] | {channel, status, delivery_role}' data/pipeline_runs/<run_id>/publish/attempt_1/publish_summary.json
 ```
+
+## Daily operator review pilot
+
+With `daily_review_mode=shadow`, publish consumes the three registered
+`daily_review` artifacts from this run. The optional
+`google_sheets_daily_review_pilot` channel creates/refreshes the front
+`00_Daily_Review_Pilot` tab without selecting or sorting rows. The publication
+gate checks byte/count/serialized hashes, attempt, run/session, shadow policy
+and calendar `PASS`. Missing/failed packs preserve the last successful tab;
+`publish_summary.daily_review` records the gate and delivery state. Local
+publishing suppresses this external channel. Annotation preservation and full
+hidden helper contracts are in [daily review](daily_review.md).

@@ -88,6 +88,7 @@ class PublishStage:
         "google_sheets_fundamental_watchlist": "publish_optional",
         "google_sheets_dashboard": "publish_optional",
         "google_sheets_final_review_pilot": "publish_optional",
+        "google_sheets_daily_review_pilot": "publish_optional",
         "google_sheets_publish_log": "publish_optional",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
@@ -172,6 +173,7 @@ class PublishStage:
         self._attach_fundamental_discovery_datasets(context, datasets)
         self._attach_technical_evidence_datasets(context, datasets)
         self._attach_final_review_pilot_data(context, datasets)
+        self._attach_daily_review_data(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -209,6 +211,7 @@ class PublishStage:
                     "google_sheets_final_review_pilot": list(
                         datasets.get("final_review_pilot_source_hashes") or []
                     ),
+                    "google_sheets_daily_review_pilot": list(datasets.get("daily_review_source_hashes") or []),
                 },
             },
             attempt_number=rank_artifact.attempt_number,
@@ -275,6 +278,10 @@ class PublishStage:
         metadata["sheets_requests_attempted"] = int(sheets_requests_attempted)
         metadata["sheets_rows_written"] = int(sheets_rows_written)
         pilot_state = datasets.get("final_review_pilot_state")
+        daily_state = datasets.get("daily_review_state")
+        if isinstance(daily_state, dict):
+            delivery = next((t for t in targets if t.get("channel") == "google_sheets_daily_review_pilot"), {})
+            metadata["daily_review"] = {**daily_state, "delivery_status": delivery.get("status", "skipped")}
         if isinstance(pilot_state, dict):
             pilot_delivery = next(
                 (target for target in targets if target.get("channel") == "google_sheets_final_review_pilot"),
@@ -579,6 +586,42 @@ class PublishStage:
             "source_run_id": context.run_id,
         })
 
+    def _attach_daily_review_data(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        state = {"status": "disabled"}
+        datasets["daily_review_state"] = state
+        if context.params.get("daily_review_mode", "off") != "shadow":
+            return
+        try:
+            from ai_trading_system.domains.opportunities.daily_review import POLICY_HASH
+            from ai_trading_system.pipeline.contracts import compute_file_hash
+            from ai_trading_system.pipeline.stages.daily_review import verify_pack
+
+            names = ("daily_review_list", "daily_review_changes", "daily_review_summary")
+            artifacts = [context.require_artifact("daily_review", n) for n in names]
+            if len({a.attempt_number for a in artifacts}) != 1:
+                raise ValueError("daily-review artifacts belong to different attempts")
+            for artifact in artifacts:
+                if not artifact.content_hash or compute_file_hash(Path(artifact.uri)) != artifact.content_hash:
+                    raise ValueError("daily-review artifact hash mismatch")
+            summary = json.loads(Path(artifacts[2].uri).read_text(encoding="utf-8"))
+            if (summary.get("status") not in {"complete", "degraded"} or summary.get("shadow_only") is not True
+                    or summary.get("session") != context.run_date or summary.get("run_id") != context.run_id
+                    or summary.get("policy_hash") != POLICY_HASH
+                    or str(summary.get("calendar", {}).get("status", "")).upper() != "PASS"):
+                raise ValueError("daily-review summary did not pass publication gate")
+            frames = [pd.read_csv(a.uri, keep_default_na=False) for a in artifacts[:2]]
+            if any(a.row_count is None or len(f) != int(a.row_count) for a, f in zip(artifacts, frames)):
+                raise ValueError("daily-review artifact row count mismatch")
+            if not verify_pack(*(f.to_dict("records") for f in frames), summary):
+                raise ValueError("daily-review decision pack mismatch")
+            datasets.update(daily_review_rows=frames[0], daily_review_changes=frames[1],
+                            daily_review_summary=summary, daily_review_ready=True,
+                            daily_review_source_hashes=sorted(a.content_hash for a in artifacts))
+            state.update(status="ready", source_status=summary["status"], rows=len(frames[0]),
+                         source_run_id=context.run_id)
+        except Exception as exc:
+            state.update(status="not_published", reason=str(exc))
+
     def _read_json_artifact_safe(self, artifact: StageArtifact | None) -> Dict[str, Any]:
         if artifact is None:
             return {}
@@ -732,6 +775,8 @@ class PublishStage:
             handlers["google_sheets_dashboard"] = self._publish_dashboard_payload
         if datasets.get("final_review_pilot_ready") is True:
             handlers["google_sheets_final_review_pilot"] = self._publish_final_review_pilot
+        if datasets.get("daily_review_ready") is True:
+            handlers["google_sheets_daily_review_pilot"] = self._publish_daily_review
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
@@ -787,6 +832,12 @@ class PublishStage:
             "trust_status": datasets.get("publish_trust_status", "unknown"),
             "watchlist_digest": str(watchlist_path),
         }
+
+    def _publish_daily_review(self, context, rank_artifact, datasets):
+        from ai_trading_system.domains.publish.channels.daily_review import publish_daily_review
+
+        return publish_daily_review(datasets["daily_review_rows"], datasets["daily_review_changes"],
+                                    datasets["daily_review_summary"], run_id=context.run_id, run_date=context.run_date)
 
     def _publish_final_review_pilot(
         self,

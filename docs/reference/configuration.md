@@ -347,3 +347,12 @@ resolving its blocker. `--force` overrides cadence, not this list.
 ## Final-review shadow switch
 
 `--final-review-mode {off,shadow}` defaults to `off` in the orchestrator. `shadow` requires `--opportunity-registry-mode shadow` and an included `opportunities` stage. `scripts/run_daily_shadow.sh` explicitly enables it; trailing `--final-review-mode off` disables it. It adds local registered review artifacts, with no rank, execution or publisher cutover. Details: [U2/U3](../development/u2_u3_final_review_validation.md).
+
+## Daily review pilot
+
+`daily_review_mode` / `--daily-review-mode` accepts `off` (default) or `shadow`.
+The daily shadow wrapper enables it. The default-stage CLI inserts consolidation
+before publish; explicit stage lists require `daily_review` to be named. CLI
+shadow mode requires Final Review shadow mode. No new environment variable,
+ranking weight, execution permission or database store is introduced.
+See [daily review](../stages/daily_review.md).

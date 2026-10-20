@@ -688,3 +688,13 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.replay_fin
 ```
 
 This command opens copied stores read-only, verifies copied registered artifacts and only creates the new output directory. It never publishes externally. A current captured store is retrospective evidence, not reconstruction of an overwritten historical vintage. See [validation and remaining gates](../development/u2_u3_final_review_validation.md).
+
+## Consolidated daily review pilot
+
+`--daily-review-mode off|shadow` defaults to `off`; `shadow` requires
+`--final-review-mode shadow`. With default stages it inserts `daily_review`
+immediately before publish. Explicit stage lists remain authoritative.
+`./scripts/run_daily_shadow.sh` enables the pilot; append
+`--daily-review-mode off` to disable it. Disabling final review also requires
+disabling daily review. For isolated replay and output details see
+[daily review](../stages/daily_review.md#commands).

@@ -106,6 +106,7 @@ UNIVERSE_REFRESH_ENABLED=0 "$PY" -m ai_trading_system.pipeline.orchestrator \
   --fundamental-discovery-mode shadow \
   --opportunity-registry-mode shadow \
   --final-review-mode shadow \
+  --daily-review-mode shadow \
   --opportunity-scan-routing-mode shadow \
   --pattern-lane-scan-mode shadow \
   --pattern-lane-scan-workers "$WORKERS" \

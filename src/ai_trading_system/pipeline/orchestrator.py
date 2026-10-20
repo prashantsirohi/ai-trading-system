@@ -50,6 +50,7 @@ from ai_trading_system.pipeline.alerts import AlertManager
 from ai_trading_system.pipeline.preflight import PreflightChecker
 from ai_trading_system.pipeline.stages import CandidateTrackerStage, CandidatesStage, EventsStage, ExecuteStage, FeaturesStage, FundamentalDiscoveryStage, FundamentalsStage, IngestStage, InsightStage, InvestigatorStage, NarrativeStage, OpportunityStage, PatternLaneScanStage, PerfTrackerStage, PublishStage, RankStage, ScanRouterStage, WeeklyStageCoverageStage
 from ai_trading_system.pipeline.stages.opportunities import OpportunityStageError
+from ai_trading_system.pipeline.stages.daily_review import DailyReviewStage, DailyReviewStageError
 from ai_trading_system.pipeline.stages.fundamental_discovery import FundamentalDiscoveryStageError
 from ai_trading_system.pipeline.stages.scan_router import ScanRouterStageError
 from ai_trading_system.pipeline.stages.pattern_lane_scan import PatternLaneScanStageError
@@ -79,10 +80,10 @@ FEATURE_SUBSTAGE_LABELS = {
     "features_phase1": "phase1 derived features",
     "features_snapshot": "feature snapshot and DQ",
 }
-PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "weekly_stage", "pattern_lane_scan", "scan_router", "investigator", "fundamentals", "fundamental_discovery", "opportunities", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "publish", "perf_tracker"]
+PIPELINE_ORDER = ["ingest", *FEATURE_SUBSTAGES, "rank", "weekly_stage", "pattern_lane_scan", "scan_router", "investigator", "fundamentals", "fundamental_discovery", "opportunities", "candidates", "candidate_tracker", "events", "execute", "insight", "narrative", "daily_review", "publish", "perf_tracker"]
 # Stages dropped from the default order unless explicitly enabled (e.g. by a flag
 # or by a detected input). They remain valid when named in an explicit stage list.
-OPTIONAL_STAGES = frozenset({"fundamentals", "fundamental_discovery", "weekly_stage", "pattern_lane_scan", "scan_router", "opportunities"})
+OPTIONAL_STAGES = frozenset({"fundamentals", "fundamental_discovery", "weekly_stage", "pattern_lane_scan", "scan_router", "opportunities", "daily_review"})
 DEFAULT_CLI_STAGES = "ingest,features,rank,investigator,fundamentals,candidates,candidate_tracker,events,execute,insight,publish,perf_tracker"
 
 
@@ -582,6 +583,7 @@ class PipelineOrchestrator:
             "insight": InsightStage(),
             "narrative": NarrativeStage(),
             "publish": PublishStage(),
+            "daily_review": DailyReviewStage(),
             "perf_tracker": PerfTrackerStage(),
         }
         if stages:
@@ -617,6 +619,7 @@ class PipelineOrchestrator:
             "insight": "building event-aware market insight",
             "narrative": "synthesizing the LLM market report from the insight packet",
             "publish": "publishing reports and channel payloads",
+            "daily_review": "consolidating all lanes into the shadow daily review",
             "perf_tracker": "appending rank cohort + forward returns to research DB",
         }
 
@@ -736,6 +739,7 @@ class PipelineOrchestrator:
             opportunity_scan_routing_mode=str(params.get("opportunity_scan_routing_mode", "off")),
             pattern_lane_scan_mode=str(params.get("pattern_lane_scan_mode", "off")),
             fundamental_discovery_mode=str(params.get("fundamental_discovery_mode", "off")),
+            daily_review_mode=str(params.get("daily_review_mode", "off")),
         )
         data_domain = params.get("data_domain", "operational")
         run_date = run_date or date.today().isoformat()
@@ -1069,7 +1073,7 @@ class PipelineOrchestrator:
                                 detail=str(exc),
                             )
                         break
-                    except (OpportunityStageError, ScanRouterStageError, PatternLaneScanStageError, FundamentalDiscoveryStageError) as exc:
+                    except (OpportunityStageError, ScanRouterStageError, PatternLaneScanStageError, FundamentalDiscoveryStageError, DailyReviewStageError) as exc:
                         opportunity_stage_failed = True
                         self.alert_manager.emit(
                             run_id=run_id,
@@ -1195,6 +1199,7 @@ class PipelineOrchestrator:
         opportunity_scan_routing_mode: str = "off",
         pattern_lane_scan_mode: str = "off",
         fundamental_discovery_mode: str = "off",
+        daily_review_mode: str = "off",
     ) -> List[str]:
         def _expand_features(stages: Iterable[str]) -> list[str]:
             expanded: list[str] = []
@@ -1218,6 +1223,7 @@ class PipelineOrchestrator:
                     and (fundamentals_enabled or str(fundamental_discovery_mode).lower() in {"compare", "shadow"})
                 )
                 or (stage == "opportunities" and str(opportunity_registry_mode).lower() == "shadow")
+                or (stage == "daily_review" and str(daily_review_mode).lower() == "shadow")
                 or (stage == "fundamental_discovery" and str(fundamental_discovery_mode).lower() in {"compare", "shadow"})
                 or (stage in {"weekly_stage", "scan_router"} and str(opportunity_scan_routing_mode).lower() in {"compare", "shadow"})
                 # R1a shadow mode needs the current week's governed weekly-stage
@@ -1416,6 +1422,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--final-review-mode", choices=("off", "shadow"), default="off",
         help="Write the artifact-only Stage 2/late Stage 1 P/F review list; requires registry shadow mode.",
+    )
+    parser.add_argument(
+        "--daily-review-mode", choices=("off", "shadow"), default="off",
+        help="Consolidate lane, watch and position evidence before publish; requires final-review shadow mode.",
     )
     parser.add_argument(
         "--fundamental-discovery-mode",
@@ -1971,6 +1981,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.final_review_mode == "shadow" and args.opportunity_registry_mode != "shadow":
         parser.error("--final-review-mode shadow requires --opportunity-registry-mode shadow")
+    if args.daily_review_mode == "shadow" and args.final_review_mode != "shadow":
+        parser.error("--daily-review-mode shadow requires --final-review-mode shadow")
     if args.smoke:
         raise RuntimeError("Smoke mode has been removed because synthetic pipeline data is no longer allowed.")
 
@@ -2019,6 +2031,8 @@ def main() -> None:
         if args.opportunity_registry_mode == "shadow" and args.stages == DEFAULT_CLI_STAGES:
             anchor = "fundamental_discovery" if "fundamental_discovery" in stage_names else "fundamentals"
             stage_names.insert(stage_names.index(anchor) + 1, "opportunities")
+        if args.daily_review_mode == "shadow" and args.stages == DEFAULT_CLI_STAGES:
+            stage_names.insert(stage_names.index("publish"), "daily_review")
     run_id = args.run_id
     if run_id is None and stage_names == ["publish"]:
         resolved_run_id = _resolve_latest_publishable_run_id(project_root, limit=50)
@@ -2044,6 +2058,7 @@ def main() -> None:
         "enable_candidate_tracker": bool(args.enable_candidate_tracker),
         "opportunity_registry_mode": args.opportunity_registry_mode,
         "final_review_mode": args.final_review_mode,
+        "daily_review_mode": args.daily_review_mode,
         "fundamental_discovery_mode": args.fundamental_discovery_mode,
         "opportunity_registry_dry_run": bool(args.opportunity_registry_dry_run),
         "opportunity_scan_routing_mode": args.opportunity_scan_routing_mode,

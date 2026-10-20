@@ -486,3 +486,11 @@ With `--final-review-mode shadow`, `opportunities` registers these attempt-scope
 | `final_review_summary` / `final_review_summary.json` | Status, denominators, source hashes/attempts, policy snapshot, calendar/DQ checks, scoped position coverage and decision-content hash |
 
 CSV schema is the fixed `REVIEW_FIELDS` tuple in `domains/opportunities/review_projection.py`, including when empty. JSON uses `final-review-artifacts-v1`. Failed generation writes empty CSVs and a failed summary with null decision hash. Existing publishers do not consume these files. See [integration contract](../development/u2_u3_final_review_validation.md).
+
+## Daily operator review artifacts
+
+The optional `daily_review` stage registers `daily_review_list` (one ordered
+exchange/symbol/session row), `daily_review_changes` (material changes and
+uncertain absences), and `daily_review_summary` (coverage, calendar, policy,
+lineage and serialized decision-pack hash). They live in the existing attempt
+tree and have no execution consumer. See the [complete contract](../stages/daily_review.md).

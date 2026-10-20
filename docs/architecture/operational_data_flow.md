@@ -21,7 +21,7 @@ The canonical logical order is:
 ```text
 ingest -> features -> rank -> weekly_stage -> pattern_lane_scan -> scan_router -> investigator -> fundamentals -> fundamental_discovery -> opportunities -> candidates
        -> candidate_tracker -> events -> execute -> insight -> narrative
-       -> publish -> perf_tracker
+       -> daily_review -> publish -> perf_tracker
 ```
 
 The persisted `PIPELINE_ORDER` expands `features`:
@@ -35,11 +35,11 @@ ingest
 -> features_sector_earnings
 -> features_phase1
 -> features_snapshot
--> rank -> weekly_stage -> scan_router -> investigator -> opportunities -> fundamentals -> candidates -> candidate_tracker
--> events -> execute -> insight -> narrative -> publish -> perf_tracker
+-> rank -> weekly_stage -> pattern_lane_scan -> scan_router -> investigator -> fundamentals -> fundamental_discovery -> opportunities -> candidates -> candidate_tracker
+-> events -> execute -> insight -> narrative -> daily_review -> publish -> perf_tracker
 ```
 
-`weekly_stage`, `scan_router`, `fundamentals`, and `opportunities` are optional. The CLI enables fundamentals by default. Phase 3B compare/shadow mode inserts weekly coverage and routing; registry shadow mode inserts opportunities. `candidate_tracker` remains enabled by default. Explicit `--stages` values are authoritative.
+`weekly_stage`, `pattern_lane_scan`, `scan_router`, `fundamentals`, `fundamental_discovery`, `opportunities`, and `daily_review` are optional. The CLI enables fundamentals by default. Phase 3B compare/shadow mode inserts weekly coverage and routing; registry shadow mode inserts opportunities. `candidate_tracker` remains enabled by default. Explicit `--stages` values are authoritative.
 
 ## End-to-end handoff
 
@@ -59,7 +59,8 @@ flowchart LR
     E --> X["execute"]
     X --> S["insight"]
     S --> N["narrative"]
-    N --> P["publish"]
+    N --> DR["daily_review (optional shadow)"]
+    DR --> P["publish"]
     P --> Q["perf_tracker"]
 ```
 
@@ -79,6 +80,7 @@ flowchart LR
 | `execute` | Candidate/event inputs plus trust and policy context | Actions, orders, fills, positions | Paper is safe default; critical DQ and risk gates block dispatch. |
 | `insight` | Upstream decision and execution artifacts | Structured analyst brief | Consumes artifacts; does not recompute upstream stages. |
 | `narrative` | Insight artifact and LLM configuration | Market report | Can be omitted from an explicit stage list. `--insight-report-type` selects the cadence, so the artifact names are `daily_insight_*` (default) or `weekly_insight_*`. |
+| `daily_review` | Verified same-run lane, review, tracker and post-execution artifacts | One listing row, material changes, coverage/lineage summary | Optional failures leave other publishers available; invalid review packs cannot refresh the pilot. |
 | `publish` | Registered materialized artifacts | External/local deliveries and summary | Retryable for the same `run_id`; must not recompute upstream data. |
 | `perf_tracker` | Published/ranked cohort context | Research-domain cohort updates | Operational and research persistence remain separated. |
 
@@ -129,3 +131,12 @@ reports, retry and remaining source limitations.
 ## Optional final-review sidecar
 
 After both lane stages, `opportunities` may append three final-review shadow artifacts to its existing outputs under `--final-review-mode shadow`. Pipeline order is unchanged. Existing publishing and execution continue to use their existing inputs. See the [opportunities contract](../stages/opportunities.md#optional-final-review-projection).
+
+## Daily operator consolidation
+
+`--daily-review-mode shadow` adds the optional `daily_review` stage immediately
+before `publish` on the default CLI path. Explicit `--stages` remains authoritative.
+The wrapper enables it; the general CLI default remains off. It requires Final
+Review shadow mode at the CLI boundary. Sources and comparison rules are in the
+[daily review contract](../stages/daily_review.md). Existing operational consumers
+retain their current inputs.

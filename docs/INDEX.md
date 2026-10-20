@@ -2,7 +2,7 @@
 
 - **Purpose:** Complete map of all documentation under `docs/`.
 - **Audience:** Anyone navigating the docs.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-10-20
 - **Source of truth:** This file is the source of truth for the doc inventory; `SYSTEM_GUIDE.md` is the source of truth for system orientation.
 
 > Each document records its own verification date. See [`development/legacy_cleanup_plan.md`](development/legacy_cleanup_plan.md) for the cleanup history.
@@ -41,6 +41,7 @@
 - [execute](stages/execute.md)
 - [insight](stages/insight.md)
 - [narrative](stages/narrative.md)
+- [daily_review](stages/daily_review.md)
 - [publish](stages/publish.md)
 - [perf_tracker](stages/perf_tracker.md)
 

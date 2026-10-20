@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalog every publish channel: input artifact, external destination, blocking role, dedupe key, retry policy, and failure semantics.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-10-20
 - **Source of truth:** `src/ai_trading_system/domains/publish/delivery_manager.py`, `src/ai_trading_system/pipeline/stages/publish.py`, `src/ai_trading_system/domains/publish/channels/{google_sheets,google_sheets_manager,telegram,quantstats,watchlist_digest}.py`, `src/ai_trading_system/domains/publish/channels/weekly_pdf/`, `src/ai_trading_system/domains/publish/channels/daily_gainers/`, `src/ai_trading_system/platform/utils/runtime_config.py`.
 
 ## Delivery manager and channel roles
@@ -91,3 +91,14 @@ No external auth. Pure local rendering; PDF generation requires the configured r
 ## Delivery log
 
 Every attempt (`delivered`, `retrying`, `failed`, `duplicate`) is recorded via `context.registry.record_delivery_log` (`delivery_manager.py:41-103`) with fields: `run_id`, `stage_name`, `channel`, `artifact_uri`, `artifact_hash`, `dedupe_key`, `attempt_number`, `status`, `external_message_id`, `external_report_id`, `error_message`, `metadata`. The publish stage summary persists targets, non-blocking failures, and (on hard failure) `failures` in `publish_summary.json` (`publish.py:164-178`).
+
+## Consolidated daily review pilot
+
+`google_sheets_daily_review_pilot` has role `publish_optional`. Only verified
+same-run, same-attempt list/changes/summary packs with current policy, matching
+byte/count/serialized hashes, shadow status and calendar `PASS` can refresh
+`00_Daily_Review_Pilot`. Invalid/missing packs omit this channel and preserve
+the last successful tab. The publisher retains materialized row order and
+exchange/symbol annotations; full hidden helpers are untruncated. Only this
+channel's dedupe inputs include the daily-review pack hashes. See
+[daily review](../stages/daily_review.md).

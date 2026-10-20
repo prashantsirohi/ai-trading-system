@@ -1302,6 +1302,42 @@ class RegistryStore:
             )
         return artifacts
 
+    def get_completed_artifact_records(
+        self, *, run_id: str | None = None, stage_name: str | None = None,
+        before_date: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Return promoted producer lineage for current inputs or prior review packs.
+
+        Consumers must still verify bytes, row counts, availability, and domain.
+        A strict date boundary excludes same-session retries from change baselines.
+        """
+        if run_id is None and (stage_name is None or before_date is None):
+            raise ValueError("Historical artifact reads require stage and date bounds")
+        clauses = ["s.status = 'completed'", "a.lifecycle_status = 'promoted'"]
+        params: list[Any] = []
+        for clause, value in (
+            ("a.run_id = ?", run_id), ("a.stage_name = ?", stage_name),
+            ("CAST(r.run_date AS DATE) < CAST(? AS DATE)", before_date),
+        ):
+            if value is not None:
+                clauses.append(clause)
+                params.append(value)
+        with self._reader() as conn:
+            cursor = conn.execute(
+                """SELECT a.run_id, a.stage_name, a.attempt_number, a.artifact_type,
+                          a.uri, a.content_hash, a.row_count, a.metadata_json,
+                          a.created_at, a.promoted_at, s.ended_at, r.run_date
+                   FROM pipeline_artifact a
+                   JOIN pipeline_stage_run s USING (run_id, stage_name, attempt_number)
+                   JOIN pipeline_run r USING (run_id)
+                   WHERE """ + " AND ".join(clauses) + """
+                   ORDER BY r.run_date DESC, r.started_at DESC,
+                            a.attempt_number DESC, a.created_at DESC""",
+                params,
+            )
+            names = [column[0] for column in cursor.description]
+            return [dict(zip(names, row)) for row in cursor.fetchall()]
+
     def get_attempt_artifacts(
         self,
         run_id: str,

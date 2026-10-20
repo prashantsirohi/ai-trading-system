@@ -2,7 +2,7 @@
 
 - **Purpose:** Define the proposed decision owners, delivery sequence, and acceptance gates for consolidating Phase 3.5 into a coherent operator workflow.
 - **Audience:** Operator, implementing engineers, and reviewers.
-- **Last verified:** 2026-09-23
+- **Last verified:** 2026-10-20
 - **Source of truth:** Current boundaries in [System Guide](../SYSTEM_GUIDE.md), [opportunity registry](../architecture/opportunity_registry.md), [candidate tracker](../stages/candidate_tracker.md), and [decision read-model migration](../architecture/decision_read_model_migration.md). This document owns the proposed consolidation backlog only.
 - **Status:** M1 queue meanings/workflow and the M2 primary comparison were accepted on 2026-09-19. G1 and G2 remain open pending human baseline and market evidence. This document does not change runtime authority, deployment readiness, or execution permissions.
 
@@ -116,7 +116,7 @@ Do not fabricate pre-cutover lifecycle events. Use an explicit legacy reference 
 
 ## Delivery order and evidence of completion
 
-M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3/M4 remain **NOT STARTED** as formal milestones. The U4 Sheets tab is wired to refresh from eligible same-run shadow artifacts and awaits the next pipeline run and five operator sessions. No acceptance gate has passed.
+M1 audit work, queue/workflow acceptance, M2 correctness implementation, and the frozen primary comparison are recorded below. The M1 human baseline remains 0/5, so G1 is open; G2 also remains open pending matured and reconciled market evidence. M3 now has a consolidated shadow projection and pilot publisher; G3 acceptance remains open. M4 remains **NOT STARTED**. The U4 Sheets tab is wired to refresh from eligible same-run shadow artifacts and awaits the next pipeline run and five operator sessions. No acceptance gate has passed.
 
 | Work item | Dependency | Completion evidence |
 |---|---|---|
@@ -215,3 +215,20 @@ lane rebuild; BSE calendar support remains explicit and unsupported. U4's
 on 2026-09-19 and is now wired to refresh on eligible daily shadow runs; five
 operator sessions remain outstanding. This proposal preserves upstream rank,
 operational selection and lifecycle ownership; G1/G2 remain open.
+
+## Consolidated daily review implementation — 2026-10-20
+
+The artifact-only [daily review projection](../stages/daily_review.md) implements
+the versioned union contract, one ordered listing row, change/coverage receipts
+and an optional Sheets front-page publisher. The wrapper enables shadow mode;
+Final Review's existing selection and priority remain separate fields. This is
+M3 pilot implementation, not G3/U5 acceptance. Five human reviews, copied-real
+source reconciliation and G2 measurement acceptance retain their existing gates.
+No lifecycle/execution authority transfer or feature rebuild is introduced.
+
+Operator-approved initial publication completed on October 20 in
+`Stock_Analysis:00_Daily_Review_Pilot`, using the verified October 16 pack.
+Read-back matched all 988 listings in generated order; 999 active/inactive
+annotation records were retained. This is publication evidence, not a completed
+human review session or acceptance gate. See the
+[daily review validation record](../stages/daily_review.md#captured-validation--2026-10-20).

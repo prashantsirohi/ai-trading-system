@@ -52,6 +52,7 @@ _FINAL_REVIEW_MANUAL_DEFAULTS = (
     "Validate technical setup, valuation comfort, and forward EPS before entry consideration", "",
 )
 OPERATOR_TAB_ORDER = [
+    "00_Daily_Review_Pilot",
     "01_Daily_Report",
     PORTFOLIO_SHEET,
     "04_Sector_Leadership",
