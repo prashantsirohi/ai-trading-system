@@ -2,7 +2,7 @@
 
 - **Purpose:** Canonical orientation and operating contract for the current AI Trading System.
 - **Audience:** Operators, developers, reviewers, and coding agents.
-- **Last verified:** 2026-09-23
+- **Last verified:** 2026-10-20
 - **Source of truth:** Current code, primarily `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, and `pyproject.toml`.
 
 ---
@@ -60,6 +60,13 @@ the only rank inputs to candidates, publishing, and execution. Rank persistence
 also records `rank_regime_freshness_v1` DQ evidence using the observed regime
 date and calculated calendar age; MCP reports stale or inconsistent evidence
 without reinterpreting policy.
+
+The `features_sector_rs` substage incrementally refreshes the existing
+`UNIV_TOP1000` benchmark through the decision date before sector RS. The refresh
+uses point-in-time monthly turnover membership and appends missing sessions;
+missing source sessions or insufficient price coverage fail before a fresh
+benchmark bar is written. Initial benchmark bootstrap remains an explicit offline
+build. This liquidity benchmark is separate from valuation universe indices.
 
 Operational ranking now enforces the same market-regime age boundary before
 using a snapshot: the newest source row must be within
@@ -429,7 +436,7 @@ batch receipt and per-symbol source hashes to `fundamentals.duckdb`. Operators
 schedule it daily during results windows (10 Jan–20 Feb, 10 Apr–15 Jun,
 10 Jul–20 Aug, 10 Oct–20 Nov) and weekly otherwise, before the evening shadow
 pipeline. The regular `fundamentals` stage uses local data. Due universe
-refreshes at ingest startup may download Screener history for new companies;
+maintenance refreshes (or explicitly enabled inline apply) may download Screener history for new companies;
 this is separate from the routine whole-universe fundamentals sync.
 Quarterly missing-results syncs suppress a symbol for 72 hours after a fresh
 export still lacks the expected quarter; operators can override that cooldown.
@@ -1029,7 +1036,16 @@ duckdb "$DATA_ROOT/ohlcv.duckdb" -cmd \
 
 Before a repair or migration, follow [backup and restore](runbooks/backup_and_restore.md). The exhaustive command and flag inventory is [commands](reference/commands.md); isolated production-shaped validation is in [copied-data canary](runbooks/copied_data_canary.md), and recovery starts with [troubleshooting](runbooks/troubleshooting.md).
 
-The daily wrapper `./scripts/run_daily_shadow.sh` also leaves a run-specific,
+The daily wrapper `./scripts/run_daily_shadow.sh` resolves the latest scheduled
+NSE session closed by 15:30 IST from the configured master holiday calendar.
+Before close, on holidays and on weekends it selects the preceding scheduled
+session. Explicit `RUN_DATE` must be a completed weekday market session; missing
+calendar-year coverage fails before pipeline startup. Resolution never uses the
+latest available stock bar, so missing expected data still reaches normal DQ.
+An existing pinned `RUN_ID` must retain its recorded session; a different resolved
+date is rejected before pipeline mutation.
+Universe maintenance uses today's acquisition date separately from this decision
+session. The wrapper forces separate maintenance mode and also leaves a run-specific,
 blank M1 operator-review form and prints its path. After reviewing the output,
 record active review time and observations manually. Existing notes survive
 retries; five distinct market-session reviews form the baseline. Pipeline
@@ -1112,11 +1128,18 @@ PYTHONPATH=src ./.venv/bin/python scripts/check_docs.py
 screen 3553765 using the existing authenticated Playwright client and retains
 companies strictly above INR 500 crore. Official NSE/BSE identities and board
 classification gate additive master insertion; Dhan supplies NSE security IDs.
-The first current-date operational ingest invocation each calendar month runs
-this module at ingest startup, including direct orchestrator and daily shadow
-runs. Pending failures retry when ingest runs again. Historical, research,
-reduced/canary and diagnostic runs skip expansion. Ingest reports refresh phases
-and company counts on the existing terminal progress bar.
+Expansion now runs through the separate maintenance CLI, monthly by default:
+`PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.domains.ingest.universe_refresh --apply`.
+Run it without pipeline/database writers. Current-date source acquisition and
+backed-up onboarding remain fail-closed; pending identities remain unadmitted.
+Daily ingest reads a maintenance receipt without network acquisition or master
+mutation; overdue maintenance is visible but does not block trusted daily updates
+for existing securities. Malformed checkpoints and normal market DQ still block.
+`UNIVERSE_REFRESH_ENABLED=1` explicitly restores inline apply for current-date
+direct orchestrator runs; the daily shadow wrapper always uses separate mode.
+The BSE active-list client uses browser-compatible TLS through `curl-cffi` and
+the official listing-page session; denial diagnostics contain status, content type
+and response hash, never cookies or response bodies.
 Existing securities are retained, including companies no longer in the screen.
 The default five-year backfill (bounded by NSE listing date) includes official
 OHLCV through yesterday (today’s EOD is never requested), NSE split/bonus adjustments and delivery, targeted technical features,
@@ -1128,8 +1151,9 @@ backup, cadence and retry details. No full-universe technical rebuild is require
 Screener ISIN-only rows are resolved against active exchange lists; unmatched
 rows are reported as excluded, rather than aborting export parsing. Ambiguous
 identities are quarantined for onboarding, while validated additions continue.
-Discovery-only quarantine returns `completed_with_gaps` and does not block
-daily ingest; acquisition and system failures still block; isolated company failures remain pending and are excluded from ranking/new execution candidates.
+Discovery-only quarantine returns `completed_with_gaps`. Acquisition and system
+failures stop the maintenance command (and explicitly enabled inline apply);
+isolated company failures remain pending and are excluded from ranking/new execution candidates.
 
 Reviewed discovery exclusions are saved in
 `configs/universe_refresh_negative_list.json`. The 59 known unresolved identities

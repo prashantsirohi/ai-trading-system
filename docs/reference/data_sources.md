@@ -2,7 +2,7 @@
 
 - **Purpose:** Catalogue every external data source the operational pipeline reads, with its role, endpoint, auth, and failure mode.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-09-14
+- **Last verified:** 2026-10-02
 - **Source of truth:** `src/ai_trading_system/domains/ingest/`, `src/ai_trading_system/domains/fundamentals/import_screener.py`, `src/ai_trading_system/domains/catalysts/collector.py`, `src/ai_trading_system/integrations/market_intel_client.py`.
 
 > **Source-of-record order.** NSE bhavcopy is the source-of-record for OHLCV. Dhan is the fallback provider for prices and is also mandatory for live execution and (via the NSE MTO/security-wise scrapers in `domains/ingest/delivery.py`) for delivery data. yfinance is last-resort fill. The older "Dhan-first ingest" claim in legacy docs is **wrong** — confirm by reading `domains/ingest/service.py` before changing this ordering.
@@ -124,6 +124,11 @@ CSV/XLSX export solely for current universe discovery and the INR 500 crore
 threshold. It resolves listing identity and non-SME status against official
 NSE `EQUITY_L.csv` and BSE active-equity records, then uses Dhan's public scrip
 master for NSE security IDs and identity-checked BSE profiles for classification.
+Active-list and classification requests use `curl-cffi` browser TLS against the
+same official BSE endpoints. Active-list acquisition first visits the official
+listing page, validates every row, and fails on denials or malformed responses;
+there is no cached/unofficial identity fallback. HTTP failure diagnostics expose
+status, content type and a response hash without storing bodies or cookies.
 This does not change operational OHLCV source ownership. Existing repair and
 onboarding writers retain official NSE/BSE bhavcopy validation and provenance.
 See [ingest](../stages/ingest.md#monthly-universe-onboarding).

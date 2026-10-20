@@ -2,7 +2,7 @@
 
 - **Purpose:** Refresh the operational OHLCV catalog (and optional delivery data) for the NSE equity universe, validate it against an independent reference, and emit a stage summary that downstream stages can fingerprint.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-09-14
+- **Last verified:** 2026-10-02
 - **Source of truth:** `src/ai_trading_system/pipeline/stages/ingest.py`, `src/ai_trading_system/domains/ingest/service.py`, `src/ai_trading_system/domains/ingest/daily_update_runner.py`, `src/ai_trading_system/domains/ingest/{providers/nse.py,providers/dhan.py,providers/yfinance.py,trust.py,validation.py,token_manager.py,delivery.py}`, `src/ai_trading_system/pipeline/dq/engine.py`
 
 ---
@@ -58,7 +58,7 @@ The pipeline-run governance tables (`pipeline_artifact`, `dq_result`, etc.) live
 
 1. `IngestStage.run` rejects `smoke=True` and calls the service (`ingest.py:30-33`).
 2. `IngestOrchestrationService.run` calls `run_default` and then persists the resulting payload as `ingest_summary.json` (`service.py:27-37`).
-3. `run_default` resolves the yfinance fallback policy via `resolve_yfinance_fallback_policy` (`service.py:120`): explicit param → `auto_enable_yfinance_fallback` → catalog-freshness probe.
+3. `run_default` first reads the separate universe-maintenance receipt (or performs explicitly enabled inline apply), then resolves the yfinance fallback policy via `resolve_yfinance_fallback_policy`: explicit param → `auto_enable_yfinance_fallback` → catalog-freshness probe.
 4. It delegates the actual ingest to `daily_update_runner.run(...)` with `symbols_only=True` (so features are skipped here) and the resolved fallback flag. The runner picks NSE-primary or Dhan-primary based on `nse_primary`; NSE is the source of record.
 5. After raw catalog upserts finish, the service synchronizes NSE split/bonus actions and recomputes adjusted OHLC for refreshed symbols that have active action history, even when the action set itself is unchanged. This ordering prevents a tail-window refresh from resetting valid adjustment factors to raw-price defaults while avoiding a full-catalog rewrite.
 6. The service queries `_catalog` via `fetch_catalog_summary` and computes `freshness_status` ∈ {`fresh`, `delayed`, `stale`}.
@@ -154,10 +154,14 @@ For the repair runbook (operator-side reset / re-ingest / validate workflow), se
 
 ## Monthly universe onboarding
 
-`domains.ingest.universe_refresh` runs at the beginning of
-`IngestOrchestrationService.run_default`, before fallback resolution or ordinary
-price ingestion, and also has a standalone maintenance CLI. It adds no logical
-pipeline stage. It uses the Screener client's authenticated screen-export
+`domains.ingest.universe_refresh` is a separate maintenance CLI. At the beginning
+of `IngestOrchestrationService.run_default`, ingest reads its checkpoint and
+records a `separate_maintenance` receipt without acquisition or master writes.
+Overdue maintenance does not block ordinary price ingestion of existing securities;
+pending identities remain excluded from ranking and new execution candidates.
+Malformed state blocks before daily ingest. Explicit inline apply remains available
+with `UNIVERSE_REFRESH_ENABLED=1` for current-date direct orchestrator runs.
+It adds no logical pipeline stage. It uses the Screener client's authenticated screen-export
 method for screen 3553765; the full CSV/XLSX export must contain a listing
 code or valid company ISIN and Market Capitalization in crore. ISIN-only rows
 resolve by exact ISIN against the official exchange lists. Rows with no active
@@ -197,19 +201,32 @@ retain their step report and verification details in the universe report.
 Unsupported BSE delivery and adjusted-price history remain visible as
 `completed_with_gaps`; failures in supported data remain pending.
 
-Ingest checks cadence at startup: calendar month by default, or rolling 28 days. A first-ever invocation is due immediately. A successful
+The maintenance command checks cadence: calendar month by default, or rolling 28 days. A first-ever invocation is due immediately. A successful
 empty-additions check advances cadence. Unresolved discovery quarantine and
 pending backfills independently bypass that cadence on the next invocation,
 except identities on the saved negative list.
-Discovery identity gaps return `completed_with_gaps`, permitting daily ingest
-after valid additions are processed. Refresh acquisition, infrastructure or unclassified failures raise `DataQualityCriticalError`
-before ordinary ingest. Current-date direct orchestrator runs and ingest retries
-use the same hook; a resumed run that already completed ingest does not rerun it.
-Historical, research, canary, symbol-limited and dry-run contexts skip expansion.
+Discovery identity gaps return `completed_with_gaps`. Acquisition, infrastructure
+or unclassified failures stop maintenance before unvalidated additions are accepted;
+explicit inline apply translates them to `DataQualityCriticalError` before daily ingest.
+The default receipt uses today's maintenance date independently of the decision session,
+retains pending identities/cooldowns, and propagates same-day completed additions.
+Historical inline, research, canary, symbol-limited and dry-run contexts skip expansion.
 Custom injected ingest operations skip by default unless explicitly enabled.
 `universe_refresh_enabled`, `universe_refresh_cadence` and
 `universe_refresh_lookback_years` are stage parameters; the first two fall back
 to `UNIVERSE_REFRESH_ENABLED` and `UNIVERSE_REFRESH_CADENCE`.
+
+The daily shadow wrapper resolves completed scheduled NSE sessions using the master
+holiday calendar and a 15:30 IST close boundary, and forces separate maintenance.
+Explicit holidays, weekends, future/unclosed dates and missing calendar years fail
+before pipeline startup. Special weekend sessions require a separately verified
+direct orchestrator workflow. Date resolution does not inspect price availability;
+expected-session holes still fail ordinary ingest/review DQ.
+
+`BSEActiveEquityClient` uses `curl-cffi` browser TLS and visits the official BSE
+listing page before the API. It validates every response row, rejects HTML/empty
+or malformed masters, and records safe HTTP-denial diagnostics. A 403 is not retried
+or replaced with cached/unofficial identities.
 
 `StageContext.report_task` emits acquisition, comparison, backup, per-company
 NSE/BSE backfill and verification updates. The existing compact terminal bar
@@ -227,13 +244,14 @@ rank/DQ and downstream artifacts.
 Discovery conflicts quarantine only the affected onboarding identities. Valid
 additions continue. `state.json:discovery_quarantine` retains each identity,
 source row, reason, first/last seen and attempt count. The queue is re-evaluated
-against a fresh complete export and official sources on subsequent ingest runs,
+against a fresh complete export and official sources on subsequent maintenance runs,
 even within the cadence interval. Entries resolved or absent from the latest
 screen are closed explicitly in `quarantine_closed`; prior attempt reports retain
 the evidence. A previously pending company with a new discovery conflict is
 deferred without mutation. This maintenance queue neither edits existing master
 identities nor replaces the market-data DQ/quarantine contract. Backfill failures
-for validated companies and global acquisition errors still block ingest.
+for validated companies and global acquisition errors stop maintenance; explicit
+inline apply also blocks ingest.
 
 The reviewed negative list at `configs/universe_refresh_negative_list.json`
 contains 59 known discovery blockers with identifiers, reasons and review dates.

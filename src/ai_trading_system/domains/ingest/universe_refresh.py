@@ -1,4 +1,4 @@
-"""Additive, resumable monthly Screener universe onboarding before daily ingest."""
+"""Separate, additive and resumable monthly Screener universe maintenance."""
 
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ from ai_trading_system.domains.ingest.new_symbol_onboarding import (
     create_onboarding_checkpoint,
     run_new_symbol_onboarding,
 )
+from ai_trading_system.domains.ingest.onboarding_gate import identities_from_checkpoint
 
 SCREEN_ID = 3553765
 SCREEN_URL = "https://www.screener.in/screens/3553765/all-stock-non-sme/"
@@ -123,6 +124,58 @@ def due(last_success: str | None, today: date, cadence: str) -> bool:
         if cadence == "monthly"
         else today >= previous + timedelta(days=28)
     )
+
+
+def maintenance_status(
+    *, project_root, as_of: date, decision_session: str, cadence: str = "monthly"
+) -> dict:
+    """Read maintenance state without acquiring sources, locks or writers."""
+    paths = get_domain_paths(project_root=project_root, data_domain="operational")
+    require_data_root_available(paths)
+    path = paths.stage_store_dir / "universe_refresh" / "state.json"
+    state = (
+        json.loads(path.read_text())
+        if path.exists()
+        else {"pending": {}, "last_success": None}
+    )
+    identities = identities_from_checkpoint(state)
+    quarantine = state.get("discovery_quarantine", {})
+    if not isinstance(quarantine, dict) or any(
+        not isinstance(item, dict) for item in quarantine.values()
+    ):
+        raise ValueError("Invalid discovery quarantine checkpoint")
+    negatives = load_negative_list(project_root)
+    reasons = []
+    if due(state.get("last_success"), as_of, cadence):
+        reasons.append("cadence_due")
+    if any(
+        not pending_negative_match(item, negatives) and retry_due(item, as_of, False)
+        for item in state["pending"].values()
+    ):
+        reasons.append("pending_retry_due")
+    if any(
+        not negative_match(item.get("source_row", {}), negatives)
+        for item in quarantine.values()
+    ):
+        reasons.append("discovery_retry_due")
+    updated = state.get("updated_symbols", [])
+    if not isinstance(updated, list) or any(
+        not isinstance(symbol, str) for symbol in updated
+    ):
+        raise ValueError("Invalid updated-symbol maintenance checkpoint")
+    return {
+        "status": "maintenance_required" if reasons else "not_due",
+        "mode": "separate_maintenance",
+        "maintenance_date": as_of.isoformat(),
+        "decision_session": decision_session,
+        "last_success": state.get("last_success"),
+        "reasons": reasons,
+        "quarantined_symbols": sorted(symbol for symbol, _ in identities),
+        "negative_list_count": len(negatives),
+        "updated_symbols": (
+            updated if state.get("updated_on") == as_of.isoformat() else []
+        ),
+    }
 
 
 def load_sources() -> dict:
@@ -342,10 +395,26 @@ class CompanyOnboardingError(RuntimeError):
 
 
 def transient_failure(exc: Exception) -> bool:
-    if isinstance(exc, (requests.Timeout, requests.ConnectionError, TimeoutError)):
+    from curl_cffi.requests.exceptions import (
+        Timeout as BrowserTimeout,
+        ConnectionError as BrowserConnectionError,
+    )
+
+    if isinstance(
+        exc,
+        (
+            requests.Timeout,
+            requests.ConnectionError,
+            TimeoutError,
+            BrowserTimeout,
+            BrowserConnectionError,
+        ),
+    ):
         return True
-    status = getattr(exc, "status", None) or getattr(
-        getattr(exc, "response", None), "status_code", None
+    status = (
+        getattr(exc, "status", None)
+        or getattr(exc, "status_code", None)
+        or getattr(getattr(exc, "response", None), "status_code", None)
     )
     return status == 429 or (isinstance(status, int) and 500 <= status < 600)
 
@@ -559,10 +628,10 @@ def negative_match(row: dict, entries: list[dict]) -> dict | None:
 
 def pending_negative_match(item: dict, entries: list[dict]) -> bool:
     return any(
-        (not entry["isin"] or entry["isin"] == item["isin"])
+        (not entry["isin"] or entry["isin"] == item.get("isin"))
         and (
-            (entry["nse_symbol"] and entry["nse_symbol"] == item["symbol_id"])
-            or (entry["bse_code"] and entry["bse_code"] == item["bse_code"])
+            (entry["nse_symbol"] and entry["nse_symbol"] == item.get("symbol_id"))
+            or (entry["bse_code"] and entry["bse_code"] == item.get("bse_code"))
         )
         for entry in entries
     )

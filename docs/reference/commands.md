@@ -2,7 +2,7 @@
 
 - **Purpose:** Authoritative runnable command and console-entrypoint reference.
 - **Audience:** Operators and developers.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-10-20
 - **Source of truth:** `pyproject.toml [project.scripts]` and the referenced CLI parsers.
 
 ---
@@ -42,6 +42,25 @@ PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.healthchec
 `./scripts/run_daily_shadow.sh` runs the normal pipeline with the fundamental,
 opportunity, routing, and pattern shadow lanes, then scores the advisory shadow
 session gate. Extra pipeline arguments are forwarded, including `--local-publish`.
+The default decision session is the latest scheduled NSE weekday session closed
+by 15:30 IST, resolved from `$DATA_ROOT/masterdata.db:nse_holidays` before run
+creation. Holidays, weekends and pre-close runs resolve to the preceding expected
+session; missing price data never makes resolution skip a scheduled session.
+Use `RUN_DATE=YYYY-MM-DD` for an explicit completed session. Explicit holidays,
+weekends, future/unclosed dates and missing holiday-year coverage fail with exit 2.
+Forwarded `--run-date` is rejected to prevent bypassing this check. Special weekend
+sessions need a separately verified direct orchestrator invocation.
+If `RUN_ID` names an existing run, its recorded session must match the resolved
+date; a holiday fallback cannot resume the October 2 run under October 1.
+Read-only date diagnosis:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -m ai_trading_system.interfaces.cli.resolve_shadow_session
+```
+
+The wrapper forces separate universe maintenance, even when inline apply is
+enabled in the environment. Source acquisition/onboarding uses the maintenance
+command below with today's date, independently of the pipeline decision session.
 It also creates a blank M1 operator-review form at
 `reports/research/shadow_sessions/<RUN_DATE>/operator_review_<run-id-hash>.md`
 and prints its absolute path. The filename uses the first 16 SHA-256 characters
@@ -647,8 +666,12 @@ Preview can use `--screen-export /path/to/export.xlsx` to avoid browser login.
 1–20. `--force` bypasses cadence; `--as-of YYYY-MM-DD` defaults to today and
 apply rejects a historical date. Apply permits authenticated company-fundamentals
 downloads and backs up affected stores. Exit 1 reports pending supported-data
-backfill failures. Discovery-only quarantine returns success with gaps. Current-date operational ingest runs this
-check first, including direct orchestrator and daily shadow runs; see [ingest](../stages/ingest.md#monthly-universe-onboarding).
+backfill failures. Discovery-only quarantine returns success with gaps. Run apply
+without other pipeline/database writers. Default operational ingest only reads its
+checkpoint and records overdue maintenance; pending identities remain excluded
+from admission. `UNIVERSE_REFRESH_ENABLED=1` restores inline current-date apply
+for direct orchestrator runs. The daily shadow wrapper always uses separate
+maintenance; see [ingest](../stages/ingest.md#monthly-universe-onboarding).
 
 ## Local final-review evidence
 

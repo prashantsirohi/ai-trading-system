@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import duckdb
@@ -586,3 +586,63 @@ def latest_index_level(
     finally:
         con.close()
     return (row[0], float(row[1])) if row else None
+
+
+def refresh_universe_index(
+    ohlcv_db_path: Path | str, *, as_of: date, min_session_symbols: int = 100
+) -> dict:
+    """Append missing benchmark sessions before sector RS and ranking.
+
+    Bootstrap remains an explicit offline operation. Never rebuild existing
+    bars or seed an earlier decision from a future index level.
+    """
+    latest = latest_index_level(ohlcv_db_path)
+    if latest is None:
+        raise RuntimeError("UNIV_TOP1000 requires an initial offline build")
+    if latest[0] >= as_of:
+        return {"status": "not_due", "bars_written": 0, "latest_date": latest[0].isoformat()}
+    start = latest[0] + timedelta(days=1)
+    calendar = trading_days_between(
+        ohlcv_db_path, start.replace(day=1), as_of,
+        min_session_symbols=min_session_symbols,
+    )
+    first_per_month = first_trading_day_of_month(calendar)
+    level = latest[1]
+    previous_day = latest[0]
+    bars_written = 0
+    members_by_month = {}
+    for day in (day for day in calendar if day >= start):
+        if (day - previous_day).days > 5:
+            raise RuntimeError(f"UNIV_TOP1000 source-session gap: {previous_day} to {day}")
+        month = (day.year, day.month)
+        if month not in members_by_month:
+            expected = first_per_month[month]
+            rebalance, members = latest_membership_on_or_before(ohlcv_db_path, day)
+            if rebalance != expected:
+                frame, sparse = compute_membership_for_rebalance(
+                    ohlcv_db_path, rebalance_date=expected,
+                )
+                if frame.empty:
+                    raise RuntimeError(f"UNIV_TOP1000 has no eligible members at {expected}")
+                upsert_membership(
+                    ohlcv_db_path, rebalance_date=expected,
+                    members_df=frame, sparse_history=sparse,
+                )
+                rebalance, members = expected, list(frame["symbol_id"])
+            members_by_month[month] = (rebalance, members)
+        rebalance, members = members_by_month[month]
+        level, diagnostics = compute_index_bar(
+            ohlcv_db_path, bar_date=day, constituents=members,
+            previous_index_level=level, rebalance_date=rebalance,
+        )
+        # A held level must not masquerade as a fresh market observation.
+        if diagnostics.quality_flag != "ok":
+            raise RuntimeError(
+                f"UNIV_TOP1000 coverage failed at {day}: "
+                f"{diagnostics.quality_flag}; used_ratio={diagnostics.used_ratio}"
+            )
+        upsert_index_bar(ohlcv_db_path, diagnostics=diagnostics)
+        bars_written += 1
+        previous_day = day
+    return {"status": "completed", "bars_written": bars_written,
+            "latest_date": previous_day.isoformat()}

@@ -2,7 +2,7 @@
 
 - **Purpose:** Explain how ingest assigns a per-run trust status, how quarantine works, how the DQ engine classifies rule failures, and what blocks the pipeline vs what is recorded and ignored.
 - **Audience:** Operators triaging a failed run; engineers writing or relaxing a DQ rule.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-10-02
 - **Source of truth:** `src/ai_trading_system/domains/ingest/trust.py` (lines 868–1095, 424–500, 750–860), `src/ai_trading_system/pipeline/contracts.py` (`TrustConfidenceEnvelope` from line 12), `src/ai_trading_system/pipeline/dq/engine.py`, `src/ai_trading_system/pipeline/stages/narrative.py:174-176`, `src/ai_trading_system/pipeline/orchestrator.py:1249-1290`.
 
 ## Trust statuses
@@ -45,6 +45,14 @@ that key instead of appending duplicate `observed` evidence. The repair helper
 the most recently recorded row.
 
 ## Where trust blocks the pipeline
+
+Universe expansion is separate maintenance by default. A failed acquisition never
+admits new identities; existing mastered securities may continue through daily
+ingest's unchanged price/provenance/quarantine gates. Ingest records a maintenance
+receipt and validates pending state before price work; malformed state raises
+`DataQualityCriticalError`. Explicit inline apply retains acquisition blocking.
+The daily wrapper validates its expected completed session before starting and
+does not fall back to an older available price date to bypass a missing session.
 
 Trust degradation is informational at the stage boundary — it does not by itself raise an exception. It influences downstream behaviour at two enforced points:
 

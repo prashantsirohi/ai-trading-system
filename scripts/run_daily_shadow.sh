@@ -10,10 +10,11 @@
 #
 # Usage:
 #   scripts/run_daily_shadow.sh [extra ai-trading-pipeline args...]
-#   RUN_DATE=2026-07-18 scripts/run_daily_shadow.sh --local-publish
+#   RUN_DATE=2026-09-29 scripts/run_daily_shadow.sh --local-publish
 #
 # Env overrides:
-#   RUN_DATE               session date (default: today, YYYY-MM-DD)
+#   RUN_DATE               explicit completed NSE session (YYYY-MM-DD); default
+#                          latest scheduled session closed by 15:30 IST.
 #   RUN_ID                 pinned run id. If unset, a plain re-run auto-resumes
 #                          the latest failed/interrupted run for RUN_DATE (skips
 #                          completed stages); otherwise mints shadow-<DATE>-<HHMMSS>.
@@ -30,7 +31,25 @@ if [[ ! -x "$PY" ]]; then
   exit 2
 fi
 
-RUN_DATE="${RUN_DATE:-$(date +%F)}"
+export PYTHONPATH="$REPO/src${PYTHONPATH:+:$PYTHONPATH}"
+for arg in "$@"; do
+  case "$arg" in
+    --run-date|--run-date=*)
+      echo "[daily-shadow] use RUN_DATE for an explicit session; --run-date would bypass calendar validation" >&2
+      exit 2
+      ;;
+  esac
+done
+SESSION_ARGS=(--project-root "$REPO")
+if [[ -n "${RUN_DATE:-}" ]]; then
+  SESSION_ARGS+=(--run-date "$RUN_DATE")
+fi
+if [[ -n "${RUN_ID:-}" ]]; then
+  SESSION_ARGS+=(--run-id "$RUN_ID")
+fi
+if ! RUN_DATE="$("$PY" -m ai_trading_system.interfaces.cli.resolve_shadow_session "${SESSION_ARGS[@]}")"; then
+  exit 2
+fi
 
 # 2. Resolve the run id. Priority:
 #      a) explicit RUN_ID env  -> pin that run (honours the operator).
@@ -80,7 +99,9 @@ echo "[daily-shadow] run_id=$RUN_ID  run_date=$RUN_DATE  workers=$WORKERS  ($RES
 #    orchestrator auto-injects weekly_stage, pattern_lane_scan, scan_router and
 #    fundamental_discovery before opportunities around the normal
 #    rank/investigator/execute/publish routine.
-"$PY" -m ai_trading_system.pipeline.orchestrator \
+# Universe expansion runs separately on the maintenance date. This invocation
+# only reads its checkpoint; existing-universe prices still pass normal DQ.
+UNIVERSE_REFRESH_ENABLED=0 "$PY" -m ai_trading_system.pipeline.orchestrator \
   --run-id "$RUN_ID" --run-date "$RUN_DATE" \
   --fundamental-discovery-mode shadow \
   --opportunity-registry-mode shadow \

@@ -2,7 +2,7 @@
 
 - **Purpose:** Configuration sources, CLI flags, and mode selectors. For env vars see [`environment_variables.md`](environment_variables.md). For commands see [`commands.md`](commands.md).
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-10-20
 - **Source of truth:** `argparse` parsers in `pipeline/orchestrator.py` and `pipeline/daily_pipeline.py`; env loading in `platform/`; config files under `config/`.
 
 ---
@@ -323,18 +323,21 @@ onboarding item always triggers another attempt. `--screen-export` supplies a
 complete local CSV/XLSX instead of downloading the screen. `--as-of` defaults
 to today; current-source apply cannot be backdated.
 
-Operational ingest defaults `UNIVERSE_REFRESH_ENABLED=1` and
-`UNIVERSE_REFRESH_CADENCE=monthly`. Set the former to `0` to omit universe
-refresh or the latter to `28-days` for rolling four-week cadence. Stage parameters
+Operational ingest defaults `UNIVERSE_REFRESH_ENABLED=0` (separate maintenance)
+and `UNIVERSE_REFRESH_CADENCE=monthly`. The default reads a maintenance receipt
+without acquisition or master writes. Set the former to `1` for explicit inline
+current-date apply, or the latter to `28-days` for rolling four-week cadence. Stage parameters
 `universe_refresh_enabled`, `universe_refresh_cadence`, and
 `universe_refresh_lookback_years` override these defaults. No separate scheduler
-is installed: cadence is checked when ingest runs. Historical, research,
-canary, symbol-limited and dry-run contexts skip expansion. Direct orchestrator
-and daily shadow runs share this hook and its terminal progress events.
+is installed: invoke the maintenance CLI separately. Historical inline, research,
+canary, symbol-limited and dry-run contexts skip expansion. The daily shadow
+wrapper forces separate maintenance and resolves its decision date from the
+configured NSE holiday calendar and 15:30 IST close; see [commands](commands.md#operational-pipeline).
 
 Unresolved `discovery_quarantine` entries bypass the success cadence to retry
-on subsequent ingest invocations. Discovery-only gaps are non-blocking; global
-acquisition and system errors remain blocking; company-specific failures are quarantined from admission.
+on subsequent maintenance invocations. Discovery-only gaps are non-blocking;
+acquisition/system errors stop maintenance or explicit inline apply; malformed
+checkpoints still block daily ingest. Company-specific failures remain quarantined from admission.
 
 `configs/universe_refresh_negative_list.json` is the reviewed onboarding exclusion
 policy (version 1). Entries contain exact NSE/BSE/export-ISIN identifiers and

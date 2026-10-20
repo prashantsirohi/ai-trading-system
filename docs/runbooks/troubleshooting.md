@@ -2,12 +2,30 @@
 
 - **Purpose:** Symptom → diagnosis → commands → fix → verify for the most common operational failures.
 - **Audience:** Operator.
-- **Last verified:** 2026-05-16
+- **Last verified:** 2026-10-02
 - **Source of truth:** [`docs/stages/*.md`](../stages/) (Failure modes sections), `src/ai_trading_system/pipeline/orchestrator.py`, plus legacy `docs/operations/troubleshooting.md`.
 
 For DQ-specific triage see [dq_failure_response.md](./dq_failure_response.md). For publish retries see [publish_retry.md](./publish_retry.md). For OHLCV repair see [data_repair.md](./data_repair.md).
 
 ---
+
+## Daily shadow calendar or universe acquisition failure
+
+`run_daily_shadow.sh` resolves the latest scheduled NSE session closed by 15:30
+IST. A default holiday/weekend run uses the preceding scheduled session; an
+explicit non-session or missing calendar year fails before pipeline startup.
+Check the selected date with the read-only `resolve_shadow_session` command in
+[commands](../reference/commands.md#operational-pipeline). Do not select an older
+session merely because expected prices are missing; let ordinary DQ expose the gap.
+
+Universe expansion is a separate monthly maintenance command. Daily ingest reads
+its checkpoint and reports overdue maintenance while retaining pending-symbol
+admission exclusions. BSE clients use browser-compatible TLS on the official
+active-list and classification endpoints. If denied, inspect HTTP status, content
+type and response hash, then retry maintenance without other writers. No cached
+identity fallback is used. Malformed checkpoints and normal market DQ remain
+blocking. `UNIVERSE_REFRESH_ENABLED=1` explicitly restores the inline hook for
+current-date direct orchestrator use; the shadow wrapper forces separate mode.
 
 ## Preflight fails: Dhan credentials missing
 

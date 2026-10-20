@@ -360,16 +360,24 @@ class FeaturesOrchestrationService:
 
     def run_sector_rs(self, context: StageContext) -> dict[str, Any]:
         from ai_trading_system.domains.features.sector_rs import compute_all_symbols_rs
+        from ai_trading_system.domains.features.universe_index import refresh_universe_index
+        from datetime import date
         from ai_trading_system.platform.db.paths import get_domain_paths
 
         paths = get_domain_paths(context.project_root, context.params.get("data_domain", "operational"))
+        context.report_task(task_name="universe_index", status="running", detail="refreshing regime benchmark")
+        benchmark = refresh_universe_index(
+            paths.ohlcv_db_path, as_of=date.fromisoformat(str(context.run_date)[:10]),
+        )
+        context.report_task(task_name="universe_index", status="done", metadata=benchmark)
         context.report_task(task_name="sector_rs", status="running", detail="computing all-symbol sector RS")
         compute_all_symbols_rs(
             db_path=str(paths.ohlcv_db_path),
             feature_store_dir=str(paths.feature_store_dir),
             masterdb_path=str(paths.master_db_path),
         )
-        return {"status": "completed", "feature_store_dir": str(paths.feature_store_dir)}
+        return {"status": "completed", "feature_store_dir": str(paths.feature_store_dir),
+                "universe_index": benchmark}
 
     def _valuation_universes(self, context: StageContext) -> list[str]:
         raw_universes = context.params.get("valuation_universes") or "UNIV_TOP500_MCAP,UNIV_TOP1000_MCAP"

@@ -2,12 +2,20 @@
 
 - **Purpose:** Triage DQ rule failures by severity, inspect `dq_result`, and rerun safely.
 - **Audience:** Operator.
-- **Last verified:** 2026-08-08
+- **Last verified:** 2026-10-02
 - **Source of truth:** [`docs/architecture/data_trust_and_dq.md`](../architecture/data_trust_and_dq.md), [`docs/stages/ingest.md`](../stages/ingest.md), `src/ai_trading_system/pipeline/dq/engine.py`.
 
 ---
 
 ## Severity ladder
+
+Monthly universe acquisition now runs separately by default. A BSE identity 403
+stops maintenance; it does not clear pending identities or relax market DQ for the
+daily existing-universe run. Inspect its safe HTTP diagnostics and retry the
+maintenance command from [commands](../reference/commands.md#monthly-universe-refresh)
+without other writers. An invalid `state.json` remains a critical ingest blocker;
+restore/repair it through the backed-up maintenance workflow rather than deleting it.
+Explicit inline apply still blocks ingest on acquisition failures.
 
 For journal-specific failures, use the [Actual Trading Journal runbook](trade_journal.md). Resolve `POSITION_DEFICIT` with earlier tradebooks or an explicitly reviewed opening proposal; do not convert a reconciliation-only holdings snapshot into inventory. Re-preview schema/formula errors from a corrected broker export. Identifier collisions require manual evidence and never overwrite prior economics.
 

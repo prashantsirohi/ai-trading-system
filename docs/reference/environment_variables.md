@@ -2,7 +2,7 @@
 
 - **Purpose:** All env vars actually read by the code, with source module and default.
 - **Audience:** Operator, developer.
-- **Last verified:** 2026-09-10
+- **Last verified:** 2026-10-02
 - **Source of truth:** Grep of `os.environ`, `os.getenv`, `getenv(`, and pydantic `Settings` in `src/`. Cited modules per row.
 
 
@@ -99,7 +99,11 @@ Not an explicit env var. Inferred from Dhan credential presence. Verify in execu
 
 ## Universe refresh ingest overrides
 
-`IngestOrchestrationService` accepts `UNIVERSE_REFRESH_ENABLED` (default `1`;
-`0` skips universe refresh) and `UNIVERSE_REFRESH_CADENCE` (`monthly` default or
+`IngestOrchestrationService` accepts `UNIVERSE_REFRESH_ENABLED` (default `0`;
+reads separate maintenance status; `1` explicitly enables current-date inline
+apply) and `UNIVERSE_REFRESH_CADENCE` (`monthly` default or
 `28-days`). Export acquisition reuses `SCREENER_USERNAME` and
 `SCREENER_PASSWORD`. Paths resolve through the normal domain helpers.
+`run_daily_shadow.sh` forces `UNIVERSE_REFRESH_ENABLED=0` for its pipeline
+invocation. Its optional `RUN_DATE` is a calendar-validated completed NSE session;
+the default resolves the latest scheduled session closed by 15:30 IST.

@@ -2,7 +2,7 @@
 
 - **Purpose:** Detailed contract for runtime roots, persistent stores, artifacts, and run lineage.
 - **Audience:** Operators recovering runs, engineers adding persistence, and reviewers tracing data.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-10-20
 - **Source of truth:** `src/ai_trading_system/platform/db/paths.py`, `src/ai_trading_system/pipeline/registry.py`, `src/ai_trading_system/domains/execution/store.py`, `src/ai_trading_system/domains/opportunities/registry/`, `src/ai_trading_system/pipeline/stages/candidate_tracker.py`, and `src/ai_trading_system/pipeline/migrations/`.
 
 ---
@@ -512,15 +512,20 @@ schema or migration is introduced. Source identity and classification evidence
 remain in run artifacts; current classification lives in the master. Pending
 failures are retained until supported onboarding stages succeed.
 
-Ingest writes a per-attempt `universe_refresh_summary.json` before continuing
-ordinary ingestion. Successful ingest registers it through `StageArtifact`;
+Default ingest reads maintenance state without source acquisition, locks or store
+mutation. Its per-attempt `universe_refresh_summary.json` records
+`mode=separate_maintenance`, today's `maintenance_date`, the `decision_session`,
+last success, due reasons, pending identities and same-day updated symbols.
+Successful ingest registers it through `StageArtifact`;
 failed-attempt files remain unpromoted. Same-day updated symbols survive a
 retry so downstream change detection includes completed onboarding writes.
 
 `state.json:discovery_quarantine` is a maintenance identity retry queue, separate
 from OHLCV market-data quarantine. It retains source rows, reasons, first/last
 seen and attempt counts. Discovery gaps do not prevent valid additions or daily
-ingest; pending companies are excluded from ranking and new execution candidates; system failures still block ingest.
+ingest; pending companies are excluded from ranking and new execution candidates.
+System failures block maintenance or explicitly enabled inline apply; malformed
+checkpoints and market-data DQ still block ordinary ingest.
 
 Reviewed discovery exclusions live in repository configuration
 `configs/universe_refresh_negative_list.json`, not a second runtime store.

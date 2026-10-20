@@ -20,7 +20,11 @@ def test_review_form_preserves_notes_and_pipeline_exit(tmp_path, pipeline_rc):
         f'#!{sys.executable}\n'
         'import os, sys\n'
         'if sys.argv[1:2] == ["-m"]:\n'
+        '    if sys.argv[2].endswith("resolve_shadow_session"):\n'
+        '        print(os.environ["RUN_DATE"])\n'
+        '        sys.exit(int(os.environ.get("TEST_CALENDAR_RC", "0")))\n'
         '    if sys.argv[2].endswith("pipeline.orchestrator"):\n'
+        '        assert os.environ["UNIVERSE_REFRESH_ENABLED"] == "0"\n'
         '        sys.exit(int(os.environ["TEST_PIPELINE_RC"]))\n'
         '    sys.exit(1)  # No session-gate verdict: still leave a review form.\n'
         'os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n'
@@ -45,6 +49,19 @@ def test_review_form_preserves_notes_and_pipeline_exit(tmp_path, pipeline_rc):
     before = form.read_bytes()
     assert run().returncode == pipeline_rc
     assert form.read_bytes() == before
+
+    # Reject invalid dates before the pipeline, gate, lock or review artifacts.
+    before_files = set(out.iterdir())
+    env['TEST_CALENDAR_RC'] = '2'
+    env['RUN_ID'] = 'invalid-date-run'
+    assert run().returncode == 2
+    assert set(out.iterdir()) == before_files
+    assert not (tmp_path / 'run_daily_shadow.lock').exists()
+    overridden = subprocess.run(['bash', str(scripts / source.name), '--run-date', '2026-10-02'],
+                                env=env, capture_output=True, text=True, timeout=20)
+    assert overridden.returncode == 2
+    assert 'use RUN_DATE' in overridden.stderr
+    env.pop('TEST_CALENDAR_RC')
     env['RUN_ID'] = 'review-run-2'
     assert run().returncode == pipeline_rc
     assert len(list(out.glob('operator_review_*.md'))) == 2

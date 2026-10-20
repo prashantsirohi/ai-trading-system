@@ -29,6 +29,13 @@ def pending_identities(
     if not path.exists():
         return set()
     payload = json.loads(path.read_text())
+    return identities_from_checkpoint(payload)
+
+
+def identities_from_checkpoint(payload: dict) -> set[tuple[str, str]]:
+    """Validate the admission portion of an already-read maintenance receipt."""
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid universe onboarding checkpoint: expected an object")
     pending = payload.get("pending")
     if not isinstance(pending, dict):
         raise ValueError(
@@ -36,6 +43,8 @@ def pending_identities(
         )
     identities = set()
     for symbol, item in pending.items():
+        if not isinstance(item, dict):
+            raise ValueError("Invalid pending onboarding record")
         exchange = item.get("exchange")
         if not symbol or exchange not in {"NSE", "BSE"}:
             raise ValueError("Invalid pending onboarding identity")

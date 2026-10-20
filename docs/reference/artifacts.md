@@ -2,7 +2,7 @@
 
 - **Purpose:** Per-stage artifact name, path pattern, producer, consumer, and authority for each materialized output.
 - **Audience:** Operator, developer, debugging.
-- **Last verified:** 2026-09-13
+- **Last verified:** 2026-10-20
 - **Source of truth:** Stage docs under [`docs/stages/`](../stages/) (each cites its writer module).
 
 ---
@@ -63,6 +63,10 @@ Current meanings include:
 - delivery collection result
 
 ### `features`
+
+The `features_sector_rs.json` substage receipt includes `universe_index` with
+refresh status, bars written, and latest date for the incremental liquidity
+benchmark refresh. See the [feature contract](../stages/features.md#regime-benchmark-refresh).
 
 Writes:
 - `feature_snapshot.json`
@@ -447,8 +451,12 @@ never authorize rank, candidates or execution.
 The ingest integration additionally writes `universe_refresh_summary.json` in
 its stage attempt and registers it after successful ingest. The same result is
 nested under `ingest_summary.universe_refresh`; completed additions merge into
-`updated_symbols`. An unsuccessful refresh leaves an unpromoted attempt report
-and blocks ordinary ingestion. Skipped safe scopes are recorded in the ingest
+`updated_symbols`. Default ingestion records a read-only maintenance receipt with
+`mode=separate_maintenance`, `maintenance_date`, `decision_session`, `last_success`,
+due `reasons` and `quarantined_symbols`; `status` is `maintenance_required` or
+`not_due`. Overdue acquisition does not block existing-universe ingestion.
+Explicit inline apply retains failed-attempt reports and blocks on acquisition
+failure. Malformed checkpoints remain blocking. Skipped safe scopes are recorded in the ingest
 summary without creating a separate refresh artifact.
 
 Universe refresh plans/reports include `excluded` rows with identity, market

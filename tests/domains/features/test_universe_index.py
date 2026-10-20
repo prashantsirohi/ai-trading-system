@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import duckdb
+import pytest
 
 from tools import build_universe_index
 
@@ -19,6 +20,7 @@ from ai_trading_system.domains.features.universe_index import (
     latest_membership_on_or_before,
     trading_days_between,
     upsert_membership,
+    refresh_universe_index,
 )
 
 
@@ -246,6 +248,64 @@ def test_first_trading_day_of_month():
     out = first_trading_day_of_month(days)
     assert out[(2024, 1)] == date(2024, 1, 2)
     assert out[(2024, 2)] == date(2024, 2, 1)
+
+
+def test_daily_refresh_appends_and_is_idempotent(tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    _build_synthetic_catalog(db, [("AAA", 0.002), ("BBB", 0.001)], days=300)
+    ensure_index_catalog_tables(db)
+    with duckdb.connect(str(db)) as c:
+        c.execute("INSERT INTO _index_catalog (index_code, date, close) VALUES (?, ?, ?)",
+                  [UNIVERSE_INDEX_CODE, date(2024, 9, 29), 100.0])
+    result = refresh_universe_index(db, as_of=date(2024, 10, 3), min_session_symbols=2)
+    assert result["bars_written"] == 4
+    assert result["latest_date"] == "2024-10-03"
+    assert refresh_universe_index(db, as_of=date(2024, 10, 3), min_session_symbols=2)["bars_written"] == 0
+    # Earlier decisions must never append from the future chain.
+    assert refresh_universe_index(db, as_of=date(2024, 9, 30), min_session_symbols=2)["bars_written"] == 0
+    with duckdb.connect(str(db), read_only=True) as c:
+        assert c.execute("SELECT close FROM _index_catalog WHERE date = ?", [date(2024, 9, 29)]).fetchone()[0] == 100.0
+        assert c.execute("SELECT MAX(rebalance_date) FROM _universe_membership").fetchone()[0] == date(2024, 10, 1)
+
+
+def test_daily_refresh_does_not_publish_low_coverage(tmp_path):
+    db = tmp_path / "ohlcv.duckdb"
+    _build_synthetic_catalog(db, [("AAA", 0.002), ("BBB", 0.001)], days=300)
+    ensure_index_catalog_tables(db)
+    with duckdb.connect(str(db)) as c:
+        c.execute("INSERT INTO _index_catalog (index_code, date, close) VALUES (?, ?, ?)",
+                  [UNIVERSE_INDEX_CODE, date(2024, 9, 29), 100.0])
+        c.execute("DELETE FROM _catalog WHERE symbol_id = ? AND timestamp = ?", ["BBB", date(2024, 9, 30)])
+    with pytest.raises(RuntimeError, match="coverage failed"):
+        refresh_universe_index(db, as_of=date(2024, 9, 30), min_session_symbols=1)
+    with duckdb.connect(str(db), read_only=True) as c:
+        assert c.execute("SELECT MAX(date) FROM _index_catalog").fetchone()[0] == date(2024, 9, 29)
+
+
+def test_sector_rs_refreshes_benchmark_first(monkeypatch, tmp_path):
+    from ai_trading_system.domains.features import universe_index, sector_rs
+    from ai_trading_system.domains.features.service import FeaturesOrchestrationService
+    from ai_trading_system.platform.db import paths
+
+    calls = []
+    receipt = {"status": "completed", "bars_written": 3, "latest_date": "2026-10-07"}
+
+    def refresh(db, *, as_of):
+        assert db == tmp_path / "ohlcv.duckdb"
+        assert as_of == date(2026, 10, 7)
+        calls.append("benchmark")
+        return receipt
+
+    monkeypatch.setattr(universe_index, "refresh_universe_index", refresh)
+    monkeypatch.setattr(sector_rs, "compute_all_symbols_rs", lambda **kwargs: calls.append("sector_rs"))
+    monkeypatch.setattr(paths, "get_domain_paths", lambda *args: SimpleNamespace(
+        ohlcv_db_path=tmp_path / "ohlcv.duckdb", feature_store_dir=tmp_path,
+        master_db_path=tmp_path / "masterdata.db"))
+    context = SimpleNamespace(project_root=tmp_path, params={}, run_date="2026-10-07",
+                              report_task=lambda **kwargs: None)
+    result = FeaturesOrchestrationService().run_sector_rs(context)
+    assert calls == ["benchmark", "sector_rs"]
+    assert result["universe_index"] == receipt
 
 
 def test_latest_membership_supports_midmonth_incremental_resume(tmp_path):

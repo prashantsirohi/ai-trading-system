@@ -90,6 +90,7 @@ def test_ingest_service_passes_context_run_date_to_daily_update_runner(
     )
 
     service = IngestOrchestrationService()
+    monkeypatch.setattr(service, "run_universe_refresh", lambda ctx: {"status": "skipped", "reason": "isolated freshness test"})
     payload = service.run_default(context)
 
     assert captured["target_end_date"] == "2026-04-08"
@@ -240,6 +241,7 @@ def test_ingest_service_respects_explicitly_disabled_yfinance_fallback(
     )
 
     service = IngestOrchestrationService()
+    monkeypatch.setattr(service, "run_universe_refresh", lambda ctx: {"status": "skipped", "reason": "isolated freshness test"})
     payload = service.run_default(context)
 
     assert captured["nse_allow_yfinance_fallback"] is False

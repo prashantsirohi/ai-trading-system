@@ -2,7 +2,7 @@
 
 - **Purpose:** Describe the seven feature substages that compute technical, sector, valuation, earnings, and Phase 1 feature materializations and then register the feature snapshot.
 - **Audience:** Operators, developers, and reviewers diagnosing feature attempts.
-- **Last verified:** 2026-09-12
+- **Last verified:** 2026-10-07
 - **Source of truth:** `src/ai_trading_system/pipeline/orchestrator.py`, `src/ai_trading_system/pipeline/stages/features.py`, `src/ai_trading_system/domains/features/service.py`, and `src/ai_trading_system/pipeline/dq/engine.py`.
 
 ---
@@ -69,6 +69,20 @@ The feature domain owns:
 3. Computational substages update their owned DuckDB/Parquet materializations and emit metadata artifacts.
 4. `features_snapshot` reads the resulting registry/catalog state, appends `_snapshots`, writes `feature_snapshot.json`, and supplies the DQ metadata.
 5. After DQ succeeds, `rank` resolves the feature snapshot and feature materializations.
+
+## Regime benchmark refresh
+
+`features_sector_rs` calls `universe_index.refresh_universe_index` before sector
+RS. It appends missing `UNIV_TOP1000` bars through the run date using existing
+monthly point-in-time membership rules. Earlier bars remain unchanged. Source
+session gaps over five calendar days or daily coverage below 70% fail the
+substage; held levels are not published as fresh observations. A missing initial
+index requires the offline builder. The substage receipt includes `universe_index`
+status, bars written, and latest date. The ranking freshness gate remains 30
+calendar days. Valuation universe indices do not replace this benchmark.
+
+No full technical feature rebuild is required for this refresh. After recovering
+a stale benchmark, rerun sector RS and snapshot before retrying rank.
 
 ## Recursive technical indicators
 

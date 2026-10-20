@@ -141,19 +141,20 @@ class IngestOrchestrationService:
         return payload
 
     def run_universe_refresh(self, context: StageContext) -> Dict:
-        """Run due onboarding before any ordinary operational ingest work."""
-        from ai_trading_system.domains.ingest.universe_refresh import run_refresh
+        """Read separate maintenance status, or explicitly opt into inline apply."""
+        from ai_trading_system.domains.ingest.universe_refresh import (
+            maintenance_status,
+            run_refresh,
+        )
 
         enabled = context.params.get(
-            "universe_refresh_enabled", os.getenv("UNIVERSE_REFRESH_ENABLED", "1")
+            "universe_refresh_enabled", os.getenv("UNIVERSE_REFRESH_ENABLED", "0")
         )
         enabled = str(enabled).strip().lower() not in {"0", "false", "no", "off"}
         reason = None
-        if not enabled:
-            reason = "disabled"
-        elif context.params.get("data_domain", "operational") != "operational":
+        if context.params.get("data_domain", "operational") != "operational":
             reason = "research domain"
-        elif context.run_date != date.today().isoformat():
+        elif enabled and context.run_date != date.today().isoformat():
             reason = "historical run"
         elif (
             context.params.get("canary_mode")
@@ -162,15 +163,39 @@ class IngestOrchestrationService:
         ):
             reason = "reduced or diagnostic run"
         elif (
-            self.operation is not None
-            and "universe_refresh_enabled" not in context.params
+            self.operation is not None and "universe_refresh_enabled" not in context.params
         ):
             reason = "custom ingest operation"
         if reason:
-            context.report_task(
-                task_name="universe_refresh", status="skip", detail=reason
-            )
+            context.report_task(task_name="universe_refresh", status="skip", detail=reason)
             return {"status": "skipped", "reason": reason}
+
+        if not enabled:
+            try:
+                result = maintenance_status(
+                    project_root=context.project_root,
+                    as_of=date.today(),
+                    decision_session=context.run_date,
+                    cadence=context.params.get(
+                        "universe_refresh_cadence",
+                        os.getenv("UNIVERSE_REFRESH_CADENCE", "monthly"),
+                    ),
+                )
+            except Exception as exc:
+                raise DataQualityCriticalError(
+                    f"Invalid universe maintenance checkpoint: {exc}"
+                ) from exc
+            context.report_task(
+                task_name="universe_refresh",
+                status="skip",
+                detail=(
+                    "Separate universe maintenance required; run domains.ingest.universe_refresh --apply outside the pipeline"
+                    if result["status"] == "maintenance_required"
+                    else "Separate universe maintenance is not due"
+                ),
+                metadata=result,
+            )
+            return result
 
         def progress(event: dict) -> None:
             logger.info("universe refresh · %s", event["detail"])

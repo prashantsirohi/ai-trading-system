@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import duckdb
-import requests
 
 from ai_trading_system.domains.ingest.bse_bhavcopy_backfill import (
     FEATURE_TYPES,
@@ -42,6 +41,7 @@ from ai_trading_system.platform.utils.env import load_project_env
 
 BSE_PROFILE_URL = "https://api.bseindia.com/BseIndiaAPI/api/ComHeadernew/w"
 BSE_ACTIVE_EQUITIES_URL = "https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w"
+BSE_LISTING_PAGE_URL = "https://www.bseindia.com/corporates/List_Scrips"
 UNKNOWN_CLASSIFICATIONS = {"", "UNKNOWN", "OTHER", "NA", "N/A", "NONE", "NULL"}
 
 
@@ -128,17 +128,21 @@ def load_symbol_targets(master_db_path: str | Path, symbols: Iterable[str]) -> l
     return targets
 
 
+def _bse_browser_session():
+    from curl_cffi import requests as browser_requests
+
+    return browser_requests.Session(impersonate="chrome")
+
+
 class BSEProfileClient:
     """Small, identity-checked client for BSE's company-header endpoint."""
 
-    def __init__(self, *, timeout_sec: float = 30.0, session: requests.Session | None = None):
+    def __init__(self, *, timeout_sec: float = 30.0, session: Any = None):
         self.timeout_sec = float(timeout_sec)
-        self.session = session or requests.Session()
+        self.session = session if session is not None else _bse_browser_session()
         self.session.headers.update(
             {
                 "Accept": "application/json,text/plain,*/*",
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 Chrome/124 Safari/537.36",
                 "Referer": "https://www.bseindia.com/",
             }
         )
@@ -149,6 +153,8 @@ class BSEProfileClient:
             params={"quotetype": "EQ", "scripcode": target.security_id, "seriesid": ""},
             timeout=self.timeout_sec,
         )
+        if getattr(response, "status_code", 200) >= 400:
+            raise BSEMasterAcquisitionError(response)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict):
@@ -189,22 +195,44 @@ class BSEProfileClient:
         )
 
 
+class BSEMasterAcquisitionError(RuntimeError):
+    """Safe forensic metadata for an official-source acquisition failure."""
+
+    def __init__(self, response):
+        self.status_code = response.status_code
+        self.source_url = str(response.url)
+        self.content_type = response.headers.get("Content-Type", "unknown")
+        self.response_sha256 = hashlib.sha256(response.content).hexdigest()
+        super().__init__(
+            f"BSE identity acquisition denied: HTTP {self.status_code}; "
+            f"url={self.source_url}; content_type={self.content_type}; "
+            f"response_sha256={self.response_sha256}. "
+            "Official identity acquisition is incomplete."
+        )
+
+
 class BSEActiveEquityClient:
     """Read the official active BSE equity master for pre-master discovery."""
 
-    def __init__(self, *, timeout_sec: float = 60.0, session: requests.Session | None = None):
+    def __init__(self, *, timeout_sec: float = 60.0, session: Any = None):
         self.timeout_sec = float(timeout_sec)
-        self.session = session or requests.Session()
+        self._warmup = session is None
+        if session is None:
+            session = _bse_browser_session()
+        self.session = session
         self.session.headers.update(
             {
                 "Accept": "application/json,text/plain,*/*",
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 Chrome/124 Safari/537.36",
-                "Referer": "https://www.bseindia.com/corporates/List_Scrips.html",
+                "Referer": BSE_LISTING_PAGE_URL,
             }
         )
 
     def fetch(self) -> tuple[list[dict[str, Any]], str]:
+        if self._warmup:
+            page = self.session.get(BSE_LISTING_PAGE_URL, timeout=self.timeout_sec)
+            if page.status_code >= 400:
+                raise BSEMasterAcquisitionError(page)
+            self._warmup = False
         response = self.session.get(
             BSE_ACTIVE_EQUITIES_URL,
             params={
@@ -216,15 +244,24 @@ class BSEActiveEquityClient:
             },
             timeout=self.timeout_sec,
         )
-        response.raise_for_status()
-        payload = response.json()
+        if response.status_code >= 400:
+            # In particular, 403 is a denial, not an empty universe or a signal
+            # to hammer the endpoint. Preserve no body/cookie/token in logs.
+            raise BSEMasterAcquisitionError(response)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("BSE active-equity master returned invalid JSON; no identities accepted") from exc
         required = {"SCRIP_CD", "Scrip_Name", "Status", "ISIN_NUMBER", "scrip_id", "Mktcap"}
         if not isinstance(payload, list) or not payload:
             raise RuntimeError("BSE active-equity master returned no rows")
-        missing = sorted(required - set(payload[0]))
-        if missing:
-            raise RuntimeError(f"BSE active-equity master schema changed; missing {missing}")
-        rows = [dict(row) for row in payload if isinstance(row, dict)]
+        for row in payload:
+            if not isinstance(row, dict):
+                raise RuntimeError("BSE active-equity master contains a malformed row")
+            missing = sorted(required - set(row))
+            if missing:
+                raise RuntimeError(f"BSE active-equity master schema changed; missing {missing}")
+        rows = [dict(row) for row in payload]
         return rows, str(response.url)
 
 

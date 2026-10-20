@@ -9,6 +9,7 @@ description = "Technical NSE trading pipeline with staged orchestration, DQ, and
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "curl-cffi==0.15.0",
   "dhanhq==2.0.2",
   "duckdb==1.4.5",
   "fastapi==0.115.8",
