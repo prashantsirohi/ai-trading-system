@@ -8,9 +8,9 @@
   and valuation row with no cutoff, so it cannot answer a historical question
   without leaking data published after the requested date.
 
-This reader filters on ``available_at``, the publication timestamp that is part
-of the ``screener_financials`` primary key. A fiscal period ending 2025-12-31
-is not knowable on 2026-01-05, so ``report_date`` alone is never a valid cutoff.
+Screener's ``available_at`` is a filing-lag estimate. A stored sync timestamp
+can establish that this particular row was observed earlier than that estimate;
+it does not establish the issuer's actual publication date.
 """
 
 from __future__ import annotations
@@ -107,21 +107,31 @@ def financials(
     with stack:
         if not _table_exists(conn, "screener_financials"):
             return []
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(screener_financials)")}
+        # A sync proves observation of the stored value, not its publication.
+        # Require a valid timestamp after the fiscal period and retain the
+        # original estimate so consumers can distinguish the two dates.
+        has_observation = {"synced_at", "source"} <= columns
+        effective = ("CASE WHEN f.source = 'screener' AND date(f.synced_at) >= date(f.report_date) "
+                     "AND date(f.synced_at) < date(f.available_at) THEN date(f.synced_at) "
+                     "ELSE f.available_at END") if has_observation else "f.available_at"
         clauses = ["f.symbol = ?", "f.statement_basis = ?"]
         params: list[Any] = [symbol_id, basis]
         if cutoff is not None:
-            clauses.append("f.available_at <= ?")
+            clauses.append(f"{effective} <= ?")
             params.append(cutoff.isoformat())
 
         joined = _table_exists(conn, "screener_metric_catalog")
         projection = (
             "f.metric_id, c.metric_name, c.statement_type, c.unit, "
-            "f.period_type, f.report_date, f.available_at, f.value, f.statement_basis"
+            f"f.period_type, f.report_date, {effective} AS available_at, f.value, f.statement_basis"
             if joined
             else "f.metric_id, f.metric_id AS metric_name, NULL AS statement_type, "
-            "NULL AS unit, f.period_type, f.report_date, f.available_at, "
+            f"NULL AS unit, f.period_type, f.report_date, {effective} AS available_at, "
             "f.value, f.statement_basis"
         )
+        if has_observation:
+            projection += ", f.available_at AS estimated_available_at, f.synced_at AS observed_at"
         join_sql = (
             "JOIN screener_metric_catalog c ON c.metric_id = f.metric_id"
             if joined

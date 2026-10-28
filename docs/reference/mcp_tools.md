@@ -192,13 +192,13 @@ observations; they never fill missing sectors from today's symbol master.
 
 ## Fundamentals and publication dates
 
-Cutoffs use the **publication** date, not the fiscal period: a quarter ending
-2025-12-31 is not knowable on 2026-01-05. `meta.as_of_basis` names the column
-used per block.
+Cutoffs use availability evidence, not the fiscal period alone. Screener's
+financial availability date is an estimate, and an earlier recorded sync can
+also establish observation. `meta.as_of_basis` names the basis used per block.
 
 | Block | Source | Cutoff column |
 |---|---|---|
-| `financials` | `screener_financials` | `available_at` (bitemporal, in the primary key) |
+| `financials` | `screener_financials` | Earlier of the estimated `available_at` and a valid Screener sync date |
 | `growth` | `company_growth_features` | `available_at` |
 | `valuation` | `screener_market_valuation` | `date` (price date) |
 | `scores` | `fundamental_scores` | `snapshot_date` (export date, a publication proxy) |
@@ -208,6 +208,13 @@ used per block.
 `statement_basis` is `standalone` (the pipeline default) or `consolidated`.
 The two live under separate keys and are never blended;
 `meta.available_statement_bases` reports what is actually stored.
+
+Screener sync dates establish that the stored value was observed by that date,
+not the issuer's announcement date. Ingestion estimates availability as 45 days
+after quarter end or 90 days after annual period end. Later imports can replace
+sync timestamps, so they cannot reconstruct first observation or earlier
+revisions. Growth uses its stored estimate and can lag the financials block.
+Financial rows expose both the original estimate and observation timestamp.
 
 ## Identity
 

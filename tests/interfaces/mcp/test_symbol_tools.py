@@ -241,7 +241,7 @@ def test_as_of_basis_is_declared_per_block(ctx: McpContext) -> None:
     """The agent must be able to see which column each cutoff used."""
 
     basis = get_fundamentals(ctx, "AAA")["meta"]["as_of_basis"]
-    assert basis["financials"] == "screener_financials.available_at"
+    assert "observed sync date" in basis["financials"]
     assert "export date" in basis["scores"]
 
 

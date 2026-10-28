@@ -333,8 +333,7 @@ FUNDAMENTALS_SURFACE: dict[str, Any] = {
     "notes": [
         "Cutoffs use the PUBLICATION date, not the fiscal period. A quarter "
         "ending 2025-12-31 is not knowable on 2026-01-05.",
-        "screener_financials and company_growth_features carry available_at, "
-        "the true publication timestamp. The score and snapshot tables carry "
+        "Screener financial available_at is an estimate; MCP can use an earlier stored sync date as an observation bound. Growth uses its stored availability estimate. The score and snapshot tables carry "
         "only snapshot_date, the export date, used as a publication proxy and "
         "declared in meta.as_of_basis.",
         "Standalone and consolidated rows live under separate keys and are "
@@ -342,7 +341,7 @@ FUNDAMENTALS_SURFACE: dict[str, Any] = {
     ],
     "columns": [
         _column("report_date", "date", "Fiscal period end."),
-        _column("available_at", "date", "When the figure became knowable."),
+        _column("available_at", "date", "Estimated availability or an earlier recorded observation date; not a verified publication date."),
         _column("statement_basis", "str", "standalone or consolidated."),
         _column(
             "fundamental_score",

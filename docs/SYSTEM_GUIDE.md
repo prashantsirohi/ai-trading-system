@@ -44,6 +44,11 @@ same-date shortlist selection and reports recorded exclusion evidence;
 sector, freshness, pipeline-run, and DQ orientation. These surfaces are
 evidence-only and cannot recommend, publish, execute, or mutate state.
 
+MCP financial line items can use an earlier Screener sync date as an observation
+bound when the stored filing-lag estimate is later. This does not establish the
+issuer's announcement date; growth retains its estimate and can lag. See the
+[MCP tool catalog](reference/mcp_tools.md).
+
 MCP v2.2 adds read-only performance evidence. `get_market_winners` computes a
 bounded adjusted close-to-close hindsight return over a named calendar window;
 it is explicitly separate from strategy results. Ranked-cohort tools read only

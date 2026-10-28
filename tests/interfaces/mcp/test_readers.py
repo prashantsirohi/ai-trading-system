@@ -162,6 +162,15 @@ def test_financials_never_leak_a_future_publication(ctx: McpContext) -> None:
     assert all(row["available_at"] <= "2026-01-09" for row in rows)
 
 
+def test_financials_use_early_observation_without_lookahead(ctx: McpContext) -> None:
+    assert screener.financials(ctx, "BBB", statement_basis="consolidated", as_of="2026-10-19") == []
+    rows = screener.financials(ctx, "BBB", statement_basis="consolidated", as_of="2026-10-20")
+    assert len(rows) == 1
+    assert rows[0]["available_at"] == "2026-10-20"
+    assert rows[0]["estimated_available_at"] == "2026-11-14"
+    assert rows[0]["observed_at"] == "2026-10-20T12:00:00"
+
+
 def test_statement_bases_are_not_blended(ctx: McpContext) -> None:
     standalone = screener.financials(ctx, "AAA", as_of="2026-03-01")
     consolidated = screener.financials(

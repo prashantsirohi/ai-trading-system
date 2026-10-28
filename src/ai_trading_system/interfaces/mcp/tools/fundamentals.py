@@ -38,7 +38,7 @@ SNAPSHOT_TABLE = "fundamental_snapshot"
 GROWTH_TABLE = "company_growth_features"
 
 _AS_OF_BASIS = {
-    "financials": "screener_financials.available_at",
+    "financials": "screener_financials.available_at or earlier observed sync date",
     "growth": "company_growth_features.available_at",
     "valuation": "screener_market_valuation.date",
     "scores": "fundamental_scores.snapshot_date (export date)",
@@ -160,6 +160,8 @@ def get_fundamentals(
         )
 
     available = screener.available_bases(ctx, symbol_id)
+    if any(row.get("estimated_available_at") != row.get("available_at") for row in financial_rows if row.get("estimated_available_at")):
+        notes.append("Some financials use the stored sync date as an observation bound; it is not an issuer publication date. Growth uses its stored availability estimate and may lag financials.")
     if available and basis not in available:
         notes.append(
             f"No {basis} rows are stored for {symbol_id}; available bases: "

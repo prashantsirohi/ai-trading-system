@@ -40,6 +40,11 @@ or regenerating cohorts; code validation does not mutate or certify live data.
 | Fundamentals | `$DATA_ROOT/fundamentals/` and `$DATA_ROOT/fundamentals.duckdb` | Fundamentals domain | Imported source snapshots/readmodels plus sync receipts, immutable thesis classifications, and daily fundamental projections. |
 | Research screener | `$DATA_ROOT/research_screener/control_plane.duckdb` | Persistent screener domain | Single-writer, append-oriented provenance, identity, immutable screen inputs/decisions/DQ, research-document/evidence history, qualitative claims, and J-curve episodes/stage observations. It has no pipeline or execution consumer. |
 
+The MCP financial reader can use a stored Screener sync date as an earlier
+observation bound than the calculated filing-lag estimate. The underlying
+store is unchanged; sync timestamps can be replaced and do not establish first
+observation or issuer publication dates.
+
 The Screener SQLite store under `$DATA_ROOT/fundamentals/` records the detected
 statement basis on financial facts and derived market valuations. Financial
 facts use `(symbol, period_type, report_date, statement_basis, metric_id,

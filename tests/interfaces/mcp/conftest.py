@@ -692,6 +692,8 @@ def _build_screener_db(path: Path) -> None:
                  150.0, "2026-02-14", "screener", "b2", "2026-02-14"),
                 ("AAA", "quarterly", "2025-12-31", "consolidated", "sales",
                  1400.0, "2026-02-14", "screener", "b2", "2026-02-14"),
+                ("BBB", "quarterly", "2026-09-30", "consolidated", "sales",
+                 250.0, "2026-11-14", "screener", "b3", "2026-10-20T12:00:00"),
             ],
         )
 
