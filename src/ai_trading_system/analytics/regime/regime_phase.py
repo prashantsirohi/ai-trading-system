@@ -152,9 +152,14 @@ def compute_regime_phase(
     else:
         phase = RegimePhase.MIXED_WAIT
 
+    phase_label = PHASE_LABELS[phase]
+    if market_stage_norm == "S4" and positive_velocity:
+        regime_context = f"{regime_norm} regime" if regime_norm else "regime unavailable"
+        phase_label = f"Stage 4 / improving breadth / {regime_context}"
+
     return RegimePhaseResult(
         regime_phase=phase,
-        phase_label=PHASE_LABELS[phase],
+        phase_label=phase_label,
         phase_emoji=PHASE_EMOJI[phase],
         driven_by=driven_by,
     )

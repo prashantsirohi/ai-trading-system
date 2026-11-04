@@ -170,3 +170,13 @@ def test_regime_phase_invalid_pct_above_200dma_keeps_existing_behavior():
     assert result.regime_phase == RegimePhase.BASE_FORMING_STAGE1
     assert result.driven_by["breadth_level_zone"] is None
     assert result.driven_by["pct_above_200dma"] is None
+
+
+def test_stage4_label_includes_improving_breadth_and_regime():
+    result = compute_regime_phase(
+        market_stage="S4", regime="neutral", breadth_velocity_bucket="very_positive",
+        s2_pct=0.3959, pct_above_200dma=0.4446,
+    )
+    assert result.regime_phase.value == "bear_stage4"
+    assert result.phase_label == "Stage 4 / improving breadth / neutral regime"
+

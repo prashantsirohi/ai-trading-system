@@ -90,6 +90,9 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    weekly gate. BSE rows receive no synthetic NSE stage join.
    Merge the resulting `StrategyConfig` (rank mode, breakout activation, weekly
    stage gate, execution regime) into `effective_params`.
+   The operator phase label also reports improving breadth and the separate
+   regime when S4 coincides with positive breadth velocity; this display text
+   does not alter the underlying phase or strategy routing.
 3. Build one `RankInputSnapshot` with an inclusive run-date cutoff and route the
    market, return, volume, ADX, SMA, highs, delivery, sector, Stage 2, weekly-stage,
    and persisted Phase 1 reads through it. Repeated reads such as SMA are cached

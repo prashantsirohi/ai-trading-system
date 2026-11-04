@@ -81,6 +81,10 @@ rank before it can select a regime profile or publish exposure guidance; the
 decision-history DQ row remains audit evidence rather than the enforcement
 mechanism.
 
+When the market stage is S4 and breadth velocity is positive, the displayed
+phase label includes improving breadth and the separate regime label. The
+underlying phase and S4 risk routing are unchanged.
+
 Rank market-stage routing reads the latest correction-aware NSE stock-stage
 breadth from governed `weekly_stock_stage_history` as of the decision date. The
 legacy mutable `ohlcv.weekly_stage_snapshot` is compatibility fallback only and
