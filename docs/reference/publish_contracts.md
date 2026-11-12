@@ -94,6 +94,12 @@ Every attempt (`delivered`, `retrying`, `failed`, `duplicate`) is recorded via `
 
 ## Consolidated daily review pilot
 
+`google_sheets_breakout_pattern_review` is an optional, review-only channel.
+It requires hash-verified same-run breakout-review and pattern-lane artifacts;
+their hashes participate in its channel dedupe key. Invalid or unavailable
+sources leave the prior tab untouched. The tab includes all source signal rows,
+and its generated columns A:K carry the run session and evidence context.
+
 `google_sheets_daily_review_pilot` has role `publish_optional`. Only verified
 same-run, same-attempt list/changes/summary packs with current policy, matching
 byte/count/serialized hashes, shadow status and calendar `PASS` can refresh

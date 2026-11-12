@@ -209,6 +209,32 @@ def publish_sector_dashboard(dashboard: pd.DataFrame) -> bool:
     return True
 
 
+def publish_breakout_pattern_review(frame: pd.DataFrame, *, run_id: str, run_date: str) -> dict:
+    """Refresh a generated-only sheet, refusing to misalign operator annotations."""
+    from ai_trading_system.domains.publish.breakout_pattern_review import COLUMNS
+
+    if not _require_spreadsheet_id():
+        raise RuntimeError("GOOGLE_SPREADSHEET_ID not set")
+    manager = GoogleSheetsManager()
+    if not manager.open_spreadsheet():
+        raise RuntimeError(f"Google Sheets authentication failed: {manager.last_error or 'unable to open spreadsheet'}")
+    sheet = manager.get_or_create_sheet("10_Breakout_Pattern_Review", rows=max(1000, len(frame) + 2), cols=26)
+    if sheet is None:
+        raise RuntimeError("Could not open breakout and pattern review sheet")
+    existing = manager._execute_with_backoff(lambda: sheet.get_all_values())
+    if any(any(str(cell).strip() for cell in row[11:]) for row in existing):
+        raise ValueError("Breakout review sheet contains operator data beyond column K; refusing to reorder it")
+    grid = [[f"REVIEW ONLY | {run_date} | {run_id}"], COLUMNS]
+    grid.extend(frame.reindex(columns=COLUMNS).where(pd.notna(frame.reindex(columns=COLUMNS)), "").values.tolist())
+    target_rows = max(len(grid), len(existing))
+    if sheet.row_count < target_rows:
+        manager._execute_with_backoff(lambda: sheet.resize(rows=target_rows), is_write=True)
+    grid.extend([[] for _ in range(target_rows - len(grid))])
+    grid = [row[:len(COLUMNS)] + [""] * max(0, len(COLUMNS) - len(row)) for row in grid]
+    manager.update_worksheet_values(sheet, grid, range_name=f"A1:K{target_rows}", raw=True)
+    return {"report_id": "breakout_pattern_review", "rows": len(frame), "sheets_requests_attempted": manager.requests_attempted, "sheets_rows_written": manager.rows_written}
+
+
 def publish_watchlist_candidates(watchlist: pd.DataFrame, *, decision_bundle: PublishDecisionBundle | None = None) -> bool:
     """Publish watchlist candidates to a dedicated worksheet."""
     spreadsheet_id = _require_spreadsheet_id()

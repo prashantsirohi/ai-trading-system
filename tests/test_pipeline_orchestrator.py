@@ -3033,7 +3033,8 @@ def test_main_exits_cleanly_after_final_dq_failure(monkeypatch: pytest.MonkeyPat
     assert exc_info.value.code == 1
 
 
-def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("market_stage", ["S2", "S4"])
+def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, market_stage: str) -> None:
     registry = RegistryStore(tmp_path)
     stage = RankStage()
     call_counts = {
@@ -3044,6 +3045,7 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
         "sector_dashboard": 0,
         "dashboard_payload": 0,
     }
+    breakout_calls = []
 
     class FakeRanker:
         def __init__(self, **_kwargs) -> None:
@@ -3055,10 +3057,14 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr("ai_trading_system.analytics.data_trust.load_data_trust_summary", lambda *_args, **_kwargs: {"status": "trusted"})
     monkeypatch.setattr("ai_trading_system.analytics.ranker.StockRanker", FakeRanker)
+    def fake_breakout_scan(**kwargs):
+        breakout_calls.append(kwargs)
+        call_counts["breakout_scan"] += 1
+        return pd.DataFrame([{"symbol_id": "AAA", "breakout_state": "qualified", "breakout_score": 0,
+                              "raw_breakout_score": 5, "raw_setup_quality": 60}])
+
     monkeypatch.setattr(
-        "ai_trading_system.domains.ranking.breakout.scan_breakouts",
-        lambda **_kwargs: call_counts.__setitem__("breakout_scan", call_counts["breakout_scan"] + 1)
-        or pd.DataFrame([{"symbol_id": "AAA", "breakout_state": "qualified"}]),
+        "ai_trading_system.domains.ranking.breakout.scan_breakouts", fake_breakout_scan
     )
     monkeypatch.setattr(
         "ai_trading_system.analytics.patterns.data.load_pattern_frame",
@@ -3115,7 +3121,7 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
         stage_name="rank",
         attempt_number=1,
         registry=registry,
-        params={"data_domain": "operational", "preflight": False},
+        params={"data_domain": "operational", "preflight": False, "market_stage_override": market_stage},
     )
     with pytest.raises(RuntimeError, match="payload build failed"):
         stage.run(context_attempt_1)
@@ -3128,12 +3134,12 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
         stage_name="rank",
         attempt_number=2,
         registry=registry,
-        params={"data_domain": "operational", "preflight": False},
+        params={"data_domain": "operational", "preflight": False, "market_stage_override": market_stage},
     )
     result = stage.run(context_attempt_2)
 
     assert call_counts["rank_all"] == 2
-    assert call_counts["breakout_scan"] == 1
+    assert call_counts["breakout_scan"] == (1 if market_stage == "S4" else 2)
     assert call_counts["pattern_scan"] == 1
     assert call_counts["stock_scan"] == 1
     assert call_counts["sector_dashboard"] == 1
@@ -3144,6 +3150,24 @@ def test_rank_stage_resumes_completed_tasks_on_retry(monkeypatch: pytest.MonkeyP
     assert task_status["rank_universe"]["status"] == "skipped"
     assert int(task_status["rank_universe"]["resumed_from_attempt"]) == 1
     assert task_status["breakout_scan"]["status"] == "skipped"
+    if market_stage == "S4":
+        assert breakout_calls[0]["market_stage"] == "S4"
+        assert breakout_calls[0]["top_n"] is None
+        assert breakout_calls[0]["require_exact_date"] is True
+        assert breakout_calls[0]["include_review_scores"] is True
+        assert task_status["breakout_scan"]["detail"] == "disabled_by_market_stage:S4"
+        assert task_status["breakout_review_scan"]["status"] == "skipped"
+        assert int(task_status["breakout_review_scan"]["resumed_from_attempt"]) == 1
+        review = pd.read_csv(context_attempt_2.output_dir() / "breakout_review_scan.csv")
+        assert review["symbol_id"].tolist() == ["AAA"]
+        assert review["exchange"].tolist() == ["NSE"]
+        assert review["market_stage"].tolist() == ["S4"]
+        assert review["execution_label"].tolist() == ["REVIEW_ONLY"]
+        assert review["breakout_state"].tolist() == ["review_only"]
+        assert review["candidate_tier"].tolist() == ["REVIEW_ONLY"]
+        assert review["breakout_score"].tolist() == [5]
+        assert review["score_basis"].tolist() == ["RAW_BREAKOUT_V2_REVIEW_ONLY"]
+        assert (context_attempt_2.output_dir() / "breakout_scan.csv").read_text().strip() == ""
 
 
 @pytest.mark.parametrize("error", [ValueError("policy mismatch"), OSError("store unavailable"), RuntimeError("persistence failed")])

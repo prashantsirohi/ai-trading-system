@@ -286,6 +286,16 @@ def compute_breakout_v2_scores(
         default=0,
     )
     df.loc[:, "breakout_score"] = df["breakout_score"] + volume_confirmation_bonus
+    # Preserve detector evidence independently of the operational stage gate.
+    # Only the explicitly isolated review artifact exposes these raw values.
+    df.loc[:, "raw_breakout_score"] = df["breakout_score"].copy()
+    raw_quality = _to_float_series(df, "setup_quality")
+    df.loc[:, "raw_setup_quality"] = raw_quality.fillna(
+        df["raw_breakout_score"] * 20.0
+        + _to_float_series(df, "volume_ratio", default=0.0).fillna(0.0).clip(0, 4) * 8.0
+        + _to_float_series(df, "adx_14", default=0.0).fillna(0.0).clip(0, 60) * 0.4
+        + (12.0 - _to_float_series(df, "near_52w_high_pct", default=12.0).fillna(12.0).clip(0, 12)) * 1.5
+    ).clip(lower=0.0, upper=100.0)
 
     # ── Market-regime score deflation ────────────────────────────────────────
     # In S3 (topping) markets, raise the effective qualification bar by
@@ -617,7 +627,7 @@ def scan_breakouts(
     master_db_path: str,
     date: Optional[str] = None,
     exchange: str = "NSE",
-    top_n: int = 25,
+    top_n: int | None = 25,
     min_volume_ratio: float = 1.2,
     min_adx: float = 18.0,
     ranked_df: Optional[pd.DataFrame] = None,
@@ -631,13 +641,15 @@ def scan_breakouts(
     breakout_symbol_trend_gate_enabled: bool = True,
     breakout_symbol_near_high_max_pct: float = 15.0,
     market_stage: str = "S2",
+    require_exact_date: bool = False,
+    include_review_scores: bool = False,
 ) -> pd.DataFrame:
     """Build a breakout monitor with setup families and market-regime context."""
     conn = duckdb.connect(ohlcv_db_path, read_only=True)
     try:
         if date is None:
             latest_row = conn.execute(
-                f"SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog WHERE exchange = '{exchange}'"
+                "SELECT MAX(CAST(timestamp AS DATE)) FROM _catalog WHERE exchange = ?", [exchange]
             ).fetchone()
             latest_date = latest_row[0] if latest_row else None
             if latest_date is None:
@@ -645,18 +657,20 @@ def scan_breakouts(
             date = str(latest_date)
         else:
             aligned_row = conn.execute(
-                f"""
+                """
                 SELECT MAX(CAST(timestamp AS DATE))
                 FROM _catalog
-                WHERE exchange = '{exchange}'
-                  AND CAST(timestamp AS DATE) <= DATE '{date}'
-                """
+                WHERE exchange = ?
+                  AND CAST(timestamp AS DATE) <= CAST(? AS DATE)
+                """, [exchange, date]
             ).fetchone()
             aligned = aligned_row[0] if aligned_row else None
+            if require_exact_date and (aligned is None or str(aligned) != str(date)):
+                raise ValueError(f"No breakout market data for {exchange} on {date}")
             if aligned is not None:
                 date = str(aligned)
 
-        query = f"""
+        query = """
             WITH base AS (
                 SELECT
                     symbol_id,
@@ -764,8 +778,8 @@ def scan_breakouts(
                         ROWS BETWEEN 199 PRECEDING AND CURRENT ROW
                     ) AS sma_200
                 FROM _catalog
-                WHERE exchange = '{exchange}'
-                  AND timestamp <= '{date}'
+                WHERE exchange = ?
+                  AND timestamp <= CAST(? AS DATE)
             ),
             enriched AS (
                 SELECT
@@ -775,32 +789,32 @@ def scan_breakouts(
             )
             SELECT *
             FROM enriched
-            WHERE trade_date = '{date}'
+            WHERE trade_date = CAST(? AS DATE)
         """
-        latest = conn.execute(query).fetchdf()
+        latest = conn.execute(query, [exchange, date, date]).fetchdf()
 
         adx_path = os.path.join(feature_store_dir, "adx", exchange)
         atr_path = os.path.join(feature_store_dir, "atr", exchange)
         if os.path.isdir(adx_path):
             adx_df = conn.execute(
-                f"""
-                SELECT symbol_id, adx_14
-                FROM read_parquet('{adx_path}/*.parquet', union_by_name = true)
-                WHERE timestamp <= '{date}'
-                QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
                 """
+                SELECT symbol_id, adx_14
+                FROM read_parquet(?, union_by_name = true)
+                WHERE timestamp <= CAST(? AS DATE)
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
+                """, [os.path.join(adx_path, '*.parquet'), date]
             ).fetchdf()
         else:
             adx_df = pd.DataFrame(columns=["symbol_id", "adx_14"])
 
         if os.path.isdir(atr_path):
             atr_df = conn.execute(
-                f"""
-                SELECT symbol_id, atr_14
-                FROM read_parquet('{atr_path}/*.parquet')
-                WHERE timestamp <= '{date}'
-                QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
                 """
+                SELECT symbol_id, atr_14
+                FROM read_parquet(?)
+                WHERE timestamp <= CAST(? AS DATE)
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
+                """, [os.path.join(atr_path, '*.parquet'), date]
             ).fetchdf()
         else:
             atr_df = pd.DataFrame(columns=["symbol_id", "atr_14"])
@@ -809,7 +823,7 @@ def scan_breakouts(
         # Uses _delivery table directly (same DB) so no extra connection needed.
         try:
             delivery_df = conn.execute(
-                f"""
+                """
                 WITH d AS (
                     SELECT
                         symbol_id,
@@ -821,12 +835,12 @@ def scan_breakouts(
                             ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
                         ) AS delivery_pct_20d_avg
                     FROM _delivery
-                    WHERE exchange = '{exchange}' AND timestamp <= '{date}'
+                    WHERE exchange = ? AND timestamp <= CAST(? AS DATE)
                 )
                 SELECT symbol_id, delivery_pct AS delivery_pct_today, delivery_pct_20d_avg
                 FROM d
                 QUALIFY ROW_NUMBER() OVER (PARTITION BY symbol_id ORDER BY timestamp DESC) = 1
-                """
+                """, [exchange, date]
             ).fetchdf()
         except Exception as exc:
             logger.warning("Could not load delivery features for breakout scan: %s", exc)
@@ -1287,10 +1301,12 @@ def scan_breakouts(
         "risk_per_share",
         "distance_from_breakout_atr",
     ]
+    if include_review_scores and breakout_engine != "legacy":
+        cols.extend(["raw_breakout_score", "raw_setup_quality"])
     available_cols = [col for col in cols if col in candidates.columns]
-    return (
-        candidates[available_cols]
-        .sort_values(["breakout_rank", "setup_quality"], ascending=[True, False], na_position="last")
-        .head(top_n)
-        .reset_index(drop=True)
+    result = candidates[available_cols].sort_values(
+        ["breakout_rank", "setup_quality"], ascending=[True, False], na_position="last"
     )
+    if top_n is not None:
+        result = result.head(top_n)
+    return result.reset_index(drop=True)

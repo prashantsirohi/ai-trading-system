@@ -45,6 +45,7 @@ TASK_FILE_MAP = {
     "rank_core": ("ranked_signals", "csv"),
     "rank_universe": ("ranked_universe", "csv"),
     "breakout_scan": ("breakout_scan", "csv"),
+    "breakout_review_scan": ("breakout_review_scan", "csv"),
     "pattern_scan": ("pattern_scan", "csv"),
     "early_accumulation_scan": ("early_accumulation_scan", "csv"),
     "stage1_scan": ("stage1_scan", "csv"),
@@ -956,55 +957,58 @@ class RankOrchestrationService:
             ]
         _breakout_active = cfg.breakout_active
         _bt_market_stage = stage_info["market_stage"]
-        if _breakout_active:
-            def breakout_builder() -> pd.DataFrame:
-                frames: list[pd.DataFrame] = []
-                for exchange in rank_exchanges:
-                    exchange_ranked = ranked_universe
-                    if not ranked_universe.empty and "exchange" in ranked_universe.columns:
-                        exchange_ranked = ranked_universe.loc[
-                            ranked_universe["exchange"].astype(str) == exchange
-                        ].copy()
-                    frame = scan_breakouts(
-                        ohlcv_db_path=str(context.db_path),
-                        feature_store_dir=str(paths.feature_store_dir),
-                        master_db_path=str(paths.master_db_path),
-                        date=context.run_date,
-                        exchange=exchange,
-                        ranked_df=exchange_ranked,
-                        breakout_engine=str(effective_params.get("breakout_engine", "v2")),
-                        include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
-                        market_bias_allowlist=breakout_market_bias_allowlist,
-                        min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
-                        sector_rs_min=(
-                            float(effective_params.get("breakout_sector_rs_min"))
-                            if effective_params.get("breakout_sector_rs_min") not in (None, "")
-                            else None
-                        ),
-                        sector_rs_percentile_min=(
-                            float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
-                            if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
-                            else None
-                        ),
-                        breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
-                        breakout_symbol_trend_gate_enabled=bool(
-                            effective_params.get("breakout_symbol_trend_gate_enabled", True)
-                        ),
-                        breakout_symbol_near_high_max_pct=float(
-                            effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
-                        ),
-                        market_stage=_bt_market_stage,
-                    )
-                    if frame is not None and not frame.empty:
-                        frames.append(frame)
-                if not frames:
-                    return pd.DataFrame()
-                output = pd.concat(frames, ignore_index=True, sort=False)
-                if "breakout_score" in output.columns:
-                    output = output.sort_values("breakout_score", ascending=False, kind="stable")
-                return output.reset_index(drop=True)
-        else:
-            breakout_builder = lambda: pd.DataFrame()  # noqa: E731
+        def breakout_builder(*, review: bool = False) -> pd.DataFrame:
+            frames: list[pd.DataFrame] = []
+            for exchange in rank_exchanges:
+                exchange_ranked = ranked_universe
+                if not ranked_universe.empty and "exchange" in ranked_universe.columns:
+                    exchange_ranked = ranked_universe.loc[
+                        ranked_universe["exchange"].astype(str) == exchange
+                    ].copy()
+                frame = scan_breakouts(
+                    ohlcv_db_path=str(context.db_path),
+                    feature_store_dir=str(paths.feature_store_dir),
+                    master_db_path=str(paths.master_db_path),
+                    date=context.run_date,
+                    exchange=exchange,
+                    ranked_df=exchange_ranked,
+                    breakout_engine=str(effective_params.get("breakout_engine", "v2")),
+                    include_legacy_families=bool(effective_params.get("breakout_include_legacy_families", True)),
+                    market_bias_allowlist=breakout_market_bias_allowlist,
+                    min_breadth_score=float(effective_params.get("breakout_min_breadth_score", 45.0)),
+                    sector_rs_min=(
+                        float(effective_params.get("breakout_sector_rs_min"))
+                        if effective_params.get("breakout_sector_rs_min") not in (None, "")
+                        else None
+                    ),
+                    sector_rs_percentile_min=(
+                        float(effective_params.get("breakout_sector_rs_percentile_min", 60.0))
+                        if effective_params.get("breakout_sector_rs_percentile_min") not in (None, "")
+                        else None
+                    ),
+                    breakout_qualified_min_score=int(effective_params.get("breakout_qualified_min_score", 3)),
+                    breakout_symbol_trend_gate_enabled=bool(
+                        effective_params.get("breakout_symbol_trend_gate_enabled", True)
+                    ),
+                    breakout_symbol_near_high_max_pct=float(
+                        effective_params.get("breakout_symbol_near_high_max_pct", 15.0)
+                    ),
+                    market_stage=_bt_market_stage,
+                    top_n=None if review else 25,
+                    require_exact_date=review,
+                    include_review_scores=review,
+                )
+                if frame is not None and not frame.empty:
+                    frame = frame.copy()
+                    if review:
+                        frame["exchange"] = exchange
+                    frames.append(frame)
+            if not frames:
+                return pd.DataFrame()
+            output = pd.concat(frames, ignore_index=True, sort=False)
+            if "breakout_score" in output.columns:
+                output = output.sort_values("breakout_score", ascending=False, kind="stable")
+            return output.reset_index(drop=True)
         breakout_df, breakout_status = self.execute_rank_task(
             context=context,
             task_name="breakout_scan",
@@ -1031,6 +1035,52 @@ class RankOrchestrationService:
             ),
         )
         outputs["breakout_scan"] = breakout_df
+        def review_breakout_builder() -> pd.DataFrame:
+            observations = breakout_builder(review=True).copy()
+            if "raw_breakout_score" in observations:
+                observations["breakout_score"] = observations["raw_breakout_score"]
+                observations["setup_quality"] = observations["raw_setup_quality"]
+                observations["score_basis"] = "RAW_BREAKOUT_V2_REVIEW_ONLY"
+            else:
+                observations["score_basis"] = "UNAVAILABLE_LEGACY_ENGINE"
+            observations["market_stage"] = _bt_market_stage
+            observations["review_status"] = (
+                "REVIEW_ONLY_HIGH_RISK_MARKET" if _bt_market_stage == "S4" else "REVIEW_ONLY"
+            )
+            # The scanner also supports legacy scoring. Never leak an
+            # actionable label or tier into this independent artifact.
+            observations["execution_label"] = "REVIEW_ONLY"
+            observations["breakout_state"] = "review_only"
+            observations["candidate_tier"] = "REVIEW_ONLY"
+            return observations
+
+        review_df, review_status = self.execute_rank_task(
+            context=context,
+            task_name="breakout_review_scan",
+            label="Build review-only breakout observations",
+            fingerprint_payload={
+                "task": "breakout_review_scan",
+                "contract_version": "breakout-review-v2",
+                "run_date": context.run_date,
+                "exchanges": rank_exchanges,
+                "market_stage": _bt_market_stage,
+                "parameters": {
+                    key: value for key, value in effective_params.items()
+                    if key.startswith("breakout_")
+                },
+                "ranked_universe_fingerprint": self.dataframe_fingerprint(ranked_universe),
+            },
+            task_status=task_status,
+            previous_attempt=previous_attempt,
+            previous_statuses=previous_statuses,
+            builder=review_breakout_builder,
+            optional=True,
+        )
+        outputs["breakout_review_scan"] = review_df
+        if review_status["status"] in {"failed", "timed_out", "degraded"}:
+            warnings.append(
+                f"breakout_review_scan unavailable: {review_status.get('error_message', review_status.get('detail'))}"
+            )
         if breakout_status["status"] in {"failed", "timed_out", "degraded"}:
             warnings.append(
                 f"breakout_scan unavailable: {breakout_status.get('error_message', breakout_status.get('detail'))}"

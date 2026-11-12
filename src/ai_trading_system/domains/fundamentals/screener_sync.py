@@ -23,7 +23,10 @@ from ai_trading_system.domains.fundamentals.discovery import (
 )
 from ai_trading_system.domains.fundamentals.screener_client import ScreenerClient, ScreenerRateLimitError
 from ai_trading_system.domains.fundamentals.screener_readmodels import build_raw_factor_frame, refresh_fundamental_readmodels
-from ai_trading_system.domains.fundamentals.screener_store import ScreenerFinancialsStore
+from ai_trading_system.domains.fundamentals.screener_store import (
+    ScreenerFinancialsStore,
+    has_storable_quarterly_data,
+)
 from ai_trading_system.platform.db.paths import get_domain_paths
 
 
@@ -190,7 +193,7 @@ def run_sync(
         if missing_current_results:
             _emit(
                 progress,
-                f"No symbols to sync; all available symbols already have quarterly report_date={resolved_expected_report_date}.",
+                "No symbols selected for sync; see missing-results selection counts above.",
             )
         else:
             _emit(progress, "No symbols to sync; all available symbols are already synced.")
@@ -370,7 +373,7 @@ def _sync_symbol_with_retries(
                     status="skipped",
                 )
                 raise MissingExpectedQuarterError(
-                    f"expected quarterly report_date={expected_report_date} not found in Screener export"
+                    f"expected quarterly report_date={expected_report_date} missing or has no usable numeric values in Screener export"
                 )
             store.save_company_financials(
                 symbol,
@@ -703,16 +706,7 @@ def _select_symbols_missing_quarterly_report_date(
 
 
 def _has_quarterly_report_date(data: dict, report_date: str) -> bool:
-    target = str(report_date)[:10]
-    quarters = data.get("quarters", {})
-    if not isinstance(quarters, dict):
-        return False
-    for values_by_date in quarters.values():
-        if not isinstance(values_by_date, dict):
-            continue
-        if any(str(key)[:10] == target for key in values_by_date):
-            return True
-    return False
+    return has_storable_quarterly_data(data, report_date)
 
 
 def _parse_date(value: str | date) -> date:

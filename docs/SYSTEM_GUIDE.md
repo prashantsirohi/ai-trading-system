@@ -92,7 +92,13 @@ cannot route the market when its newest source row is more than ten calendar
 days old. The same source choice now owns each NSE security's weekly-stage
 label, confidence, age bonus, and weekly gate inside ranking; row-level source,
 as-of, age, hash, and fallback lineage are retained in rank artifacts. A fresh
-S4 classification still disables breakout detection. `ranked_universe` keeps
+S4 classification keeps the operational breakout output disabled, while a
+separate `breakout_review_scan.csv` records uncapped, review-only detections
+in every market stage for each configured exchange when the requested session
+exists. The review score retains the raw breakout-v2 evidence score before
+market-stage adjustment; operational stage gates remain in force. Google Sheets can display that evidence with pattern-lane observations
+in `10_Breakout_Pattern_Review`; neither evidence stream feeds execution through
+that tab. `ranked_universe` keeps
 ineligible rows for audit, while `ranked_signals` applies `eligible_rank` before
 score thresholding and `top_n`, so a hard eligibility failure cannot enter the
 actionable shortlist. When
@@ -449,6 +455,9 @@ maintenance refreshes (or explicitly enabled inline apply) may download Screener
 this is separate from the routine whole-universe fundamentals sync.
 Quarterly missing-results syncs suppress a symbol for 72 hours after a fresh
 export still lacks the expected quarter; operators can override that cooldown.
+An expected-quarter header without any storable finite numeric quarterly value
+is treated as missing and receives the same cooldown. Empty selection is
+reported separately from the already-present, fallback, and cooldown counts.
 A consolidated request already classified as terminal standalone-only is not
 reselected merely because no consolidated row can exist. Batch history records
 the expected report date, cooldown, and separate succeeded/skipped/failed

@@ -89,6 +89,7 @@ class PublishStage:
         "google_sheets_dashboard": "publish_optional",
         "google_sheets_final_review_pilot": "publish_optional",
         "google_sheets_daily_review_pilot": "publish_optional",
+        "google_sheets_breakout_pattern_review": "publish_optional",
         "google_sheets_publish_log": "publish_optional",
         "quantstats_dashboard_tearsheet": "publish_of_record",
         "telegram_summary": "informational",
@@ -174,6 +175,7 @@ class PublishStage:
         self._attach_technical_evidence_datasets(context, datasets)
         self._attach_final_review_pilot_data(context, datasets)
         self._attach_daily_review_data(context, datasets)
+        self._attach_breakout_pattern_review(context, datasets)
         self._attach_decision_bundle(context, datasets)
         ranked_df = datasets.get("ranked_signals", pd.DataFrame())
 
@@ -212,6 +214,7 @@ class PublishStage:
                         datasets.get("final_review_pilot_source_hashes") or []
                     ),
                     "google_sheets_daily_review_pilot": list(datasets.get("daily_review_source_hashes") or []),
+                    "google_sheets_breakout_pattern_review": list(datasets.get("breakout_pattern_source_hashes") or []),
                 },
             },
             attempt_number=rank_artifact.attempt_number,
@@ -279,6 +282,10 @@ class PublishStage:
         metadata["sheets_rows_written"] = int(sheets_rows_written)
         pilot_state = datasets.get("final_review_pilot_state")
         daily_state = datasets.get("daily_review_state")
+        breakout_pattern_state = datasets.get("breakout_pattern_review_state")
+        if isinstance(breakout_pattern_state, dict):
+            delivery = next((t for t in targets if t.get("channel") == "google_sheets_breakout_pattern_review"), {})
+            metadata["breakout_pattern_review"] = {**breakout_pattern_state, "delivery_status": delivery.get("status", "skipped")}
         if isinstance(daily_state, dict):
             delivery = next((t for t in targets if t.get("channel") == "google_sheets_daily_review_pilot"), {})
             metadata["daily_review"] = {**daily_state, "delivery_status": delivery.get("status", "skipped")}
@@ -586,6 +593,48 @@ class PublishStage:
             "source_run_id": context.run_id,
         })
 
+    def _attach_breakout_pattern_review(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        from ai_trading_system.domains.publish.breakout_pattern_review import build_breakout_pattern_review
+        from ai_trading_system.pipeline.contracts import compute_file_hash
+        from ai_trading_system.platform.db.paths import get_domain_paths
+
+        state = {"status": "not_published"}
+        datasets["breakout_pattern_review_state"] = state
+        try:
+            names = (("rank", "breakout_review_scan"), ("rank", "rank_summary"),
+                     ("pattern_lane_scan", "pattern_lane_scan"), ("pattern_lane_scan", "pattern_lane_summary"))
+            artifacts = [context.require_artifact(stage, name) for stage, name in names]
+            if artifacts[0].attempt_number != artifacts[1].attempt_number or artifacts[2].attempt_number != artifacts[3].attempt_number:
+                raise ValueError("source artifacts belong to different attempts")
+            root = get_domain_paths(context.project_root, context.params.get("data_domain", "operational")).pipeline_runs_dir
+            for (stage, _), artifact in zip(names, artifacts):
+                expected = (root / context.run_id / stage / f"attempt_{artifact.attempt_number}").resolve()
+                path = Path(artifact.uri).resolve()
+                if path.parent != expected or not artifact.content_hash or compute_file_hash(path) != artifact.content_hash:
+                    raise ValueError("source artifact path or hash mismatch")
+            rank_summary = self._read_json_artifact(artifacts[1])
+            pattern_summary = self._read_json_artifact(artifacts[3])
+            task = (rank_summary.get("task_status") or {}).get("breakout_review_scan") or {}
+            task_ok = task.get("status") in {"completed", "completed_empty"} or (task.get("status") == "skipped" and task.get("resumed_from_attempt"))
+            if not task_ok or pattern_summary.get("status") != "completed":
+                raise ValueError("source scan did not complete")
+            frames = [self._read_artifact(artifacts[i]) for i in (0, 2)]
+            if any(artifacts[i].row_count is None or len(frame) != int(artifacts[i].row_count) for i, frame in zip((0, 2), frames)):
+                raise ValueError("source row count mismatch")
+            if not frames[0].empty:
+                if "review_status" not in frames[0] or not frames[0]["review_status"].astype(str).str.startswith("REVIEW_ONLY").all():
+                    raise ValueError("breakout source is not review-only")
+            if not frames[1].empty and "as_of_date" not in frames[1]:
+                raise ValueError("pattern source session is missing")
+            if any(not frame.empty and "as_of_date" in frame and not frame["as_of_date"].astype(str).eq(context.run_date).all() for frame in frames):
+                raise ValueError("source session mismatch")
+            datasets["breakout_pattern_review_rows"] = build_breakout_pattern_review(*frames, session=context.run_date)
+            datasets["breakout_pattern_source_hashes"] = sorted(a.content_hash for a in artifacts)
+            datasets["breakout_pattern_review_ready"] = True
+            state.update(status="ready", breakout_rows=len(frames[0]), pattern_rows=len(frames[1]), source_run_id=context.run_id)
+        except Exception as exc:
+            state.update(reason=str(exc))
+
     def _attach_daily_review_data(self, context: StageContext, datasets: Dict[str, Any]) -> None:
         state = {"status": "disabled"}
         datasets["daily_review_state"] = state
@@ -777,6 +826,8 @@ class PublishStage:
             handlers["google_sheets_final_review_pilot"] = self._publish_final_review_pilot
         if datasets.get("daily_review_ready") is True:
             handlers["google_sheets_daily_review_pilot"] = self._publish_daily_review
+        if datasets.get("breakout_pattern_review_ready") is True:
+            handlers["google_sheets_breakout_pattern_review"] = self._publish_breakout_pattern_review
         has_fundamentals = any(
             isinstance(datasets.get(name), pd.DataFrame) and not datasets.get(name).empty
             for name in (
@@ -838,6 +889,11 @@ class PublishStage:
 
         return publish_daily_review(datasets["daily_review_rows"], datasets["daily_review_changes"],
                                     datasets["daily_review_summary"], run_id=context.run_id, run_date=context.run_date)
+
+    def _publish_breakout_pattern_review(self, context, rank_artifact, datasets):
+        from ai_trading_system.domains.publish.channels.google_sheets import publish_breakout_pattern_review
+
+        return publish_breakout_pattern_review(datasets["breakout_pattern_review_rows"], run_id=context.run_id, run_date=context.run_date)
 
     def _publish_final_review_pilot(
         self,

@@ -2,7 +2,7 @@
 
 - **Purpose:** Optional enrichment of rank artifacts from the canonical Screener.in SQLite fundamentals store — adds tiering, watchlist bucketing, hard red-flag flags, and industry-level scores.
 - **Audience:** Operator, developer, debugging
-- **Last verified:** 2026-08-15
+- **Last verified:** 2026-11-12
 - **Source of truth:**
   - `src/ai_trading_system/pipeline/stages/fundamentals.py` (`FundamentalsStage`)
   - `src/ai_trading_system/domains/fundamentals/enrich_rank.py`
@@ -123,6 +123,11 @@ Skip path: when the scores CSV is missing, the stage writes only `fundamental_su
   72-hour retry cooldown by default; use
   `--missing-results-retry-cooldown-hours` to change it or `0` to disable it.
   The cooldown is scoped to the exact requested basis and expected report date.
+  A quarter header alone is insufficient: at least one storable finite numeric
+  quarterly value is required. Empty or non-numeric quarter data is recorded
+  as skipped and enters the same cooldown. Zero is a valid value. When no
+  symbols are selected, the selection counts distinguish already-present,
+  standalone-only and cooling-down symbols.
 - The unified command defaults to `--statement-basis both`: it resumes the
   standalone and consolidated ledgers independently and refreshes resolved
   score/trend readmodels once after both passes. A consolidated request that

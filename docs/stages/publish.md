@@ -149,3 +149,19 @@ and calendar `PASS`. Missing/failed packs preserve the last successful tab;
 `publish_summary.daily_review` records the gate and delivery state. Local
 publishing suppresses this external channel. Annotation preservation and full
 hidden helper contracts are in [daily review](daily_review.md).
+
+## Breakout and pattern review
+
+The optional `google_sheets_breakout_pattern_review` channel writes the
+generated columns A:K of `10_Breakout_Pattern_Review`. It combines every row
+from the same-run uncapped `breakout_review_scan` and `pattern_lane_scan`;
+pattern rows are ordered by their existing score and retain freshness and
+evidence class. Breakout scores are the raw breakout-v2 evidence scores before
+market-stage adjustment; suppression-only pattern rows are shown without a
+numeric score, because no positive pattern score is defined for them. This is
+a review surface, not an execution signal. It requires
+completed scan statuses, same-run attempt paths, matching hashes and row counts,
+and matching pattern session dates. Missing, failed, or invalid inputs leave the
+previous sheet intact. If the tab has data beyond K, publication refuses to
+reorder rows so manual annotations cannot silently attach to another symbol.
+Local publishing does not write Sheets.

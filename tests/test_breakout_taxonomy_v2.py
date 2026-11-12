@@ -4,6 +4,7 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+import pytest
 
 from ai_trading_system.domains.ranking.breakout import (
     _prepare_rank_context,
@@ -67,6 +68,22 @@ def test_breakout_score_contract_matches_v2_spec() -> None:
     assert int(out.iloc[0]["breakout_score"]) == 8
     assert int(out.iloc[0]["breakout_rank"]) == 1
     assert out.iloc[0]["breakout_state"] == "qualified"
+
+
+def test_raw_review_score_does_not_change_with_market_stage():
+    candidates = pd.DataFrame([_volume_confirmation_candidate("AAA", ratio_confirmed=True)])
+    results = {
+        stage: compute_breakout_v2_scores(
+            candidates, market_bias="BULLISH", breadth_score=68.0,
+            market_stage=stage,
+        ).iloc[0]
+        for stage in ("S2", "S3", "S4")
+    }
+    assert {row["raw_breakout_score"] for row in results.values()} == {8}
+    assert {row["raw_setup_quality"] for row in results.values()} == {80.0}
+    assert results["S2"]["breakout_score"] == 8
+    assert results["S3"]["breakout_score"] == 5
+    assert results["S4"]["breakout_score"] == 0
 
 
 def test_breakout_rank_tie_breaks_by_setup_quality() -> None:
@@ -624,3 +641,27 @@ def test_breakout_scan_emits_phase1b_risk_liquidity_fields(tmp_path: Path, monke
     assert pd.notna(row["initial_stop_price"])
     assert pd.notna(row["risk_per_share"])
     assert pd.notna(row["distance_from_breakout_atr"])
+
+    conn = duckdb.connect(str(db_path))
+    for index in range(30):
+        conn.execute(
+            "INSERT INTO _catalog SELECT ?, exchange, timestamp, open, high, low, close, volume FROM _catalog WHERE symbol_id = ?",
+            [f"TEST{index:02}", "AAA"],
+        )
+    conn.close()
+    review = scan_breakouts(
+        str(db_path), str(tmp_path / "features"), str(tmp_path / "master.db"),
+        date=str(dates[-1].date()), ranked_df=ranked, top_n=None,
+        market_stage="S4", require_exact_date=True, include_review_scores=True,
+        breakout_symbol_trend_gate_enabled=False,
+    )
+    assert len(review) == 31
+    assert (review["breakout_score"] == 0).all()
+    assert (review["raw_breakout_score"] > 0).all()
+    assert (review["raw_setup_quality"] > 0).all()
+
+    with pytest.raises(ValueError, match="No breakout market data"):
+        scan_breakouts(
+            str(db_path), str(tmp_path / "features"), str(tmp_path / "master.db"),
+            date="2030-01-01", market_stage="S4", require_exact_date=True,
+        )

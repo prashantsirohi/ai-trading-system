@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import math
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -810,6 +811,24 @@ def _section_for_row(period_type: str, statement_type: str) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def has_storable_quarterly_data(data: dict[str, Any], report_date: str) -> bool:
+    """Check for a finite quarterly value the financial-row writer can store."""
+    quarters = data.get("quarters", {})
+    if not isinstance(quarters, dict):
+        return False
+    target = str(report_date)[:10]
+    for metric, values in quarters.items():
+        if str(metric).lower().strip() in {"face value", "prices"} or not isinstance(values, dict):
+            continue
+        for period, value in values.items():
+            if str(period)[:10] != target:
+                continue
+            numeric = _to_float(value)
+            if numeric is not None and math.isfinite(numeric):
+                return True
+    return False
 
 
 def _to_float(value: Any) -> float | None:

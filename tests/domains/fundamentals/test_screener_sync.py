@@ -378,6 +378,45 @@ def test_missing_current_results_skips_stale_export_without_expected_quarter(
     assert batch == (1, 0, 1, 0, 1, "2025-12-31", 72.0)
 
 
+@pytest.mark.parametrize("value", [None, "", "-", "nan", "inf"])
+def test_missing_quarter_header_without_numeric_data_is_cooled_down(monkeypatch, tmp_path: Path, value) -> None:
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_company_data(self, symbol, **_kwargs):
+            calls.append(symbol)
+            data = _company_data("2025-12-31")
+            data["quarters"] = {"Sales": {"2025-12-31": value}, "Prices": {"2025-12-31": 100}}
+            return _fetch_result(tmp_path, symbol, data)
+
+    calls: list[str] = []
+    messages: list[str] = []
+    db_path = tmp_path / "screener_financials.db"
+    monkeypatch.setattr(screener_sync, "ScreenerClient", FakeClient)
+    monkeypatch.setattr(screener_sync, "_load_symbols", lambda *_args, **_kwargs: ["AAA"])
+    kwargs = dict(
+        statement_basis="standalone", db_path=db_path,
+        master_db_path=tmp_path / "masterdata.db", exports_dir=tmp_path / "exports",
+        missing_current_results=True, as_of_date="2026-01-15",
+        refresh_readmodels=False, progress=messages.append,
+    )
+    first = screener_sync.run_sync(**kwargs)
+    second = screener_sync.run_sync(**kwargs)
+    assert (first["succeeded"], first["skipped"], first["failed"]) == (0, 1, 0)
+    assert second["total"] == 0
+    assert calls == ["AAA"]
+    assert any("retry_cooldown=1" in message for message in messages)
+    assert not any("all available symbols already have" in message for message in messages)
+
+
+@pytest.mark.parametrize("value", [0, "0", "1,234.50", "12.5%"])
+def test_expected_quarter_accepts_numeric_values_including_zero(value) -> None:
+    assert screener_sync._has_quarterly_report_date(
+        {"quarters": {"Sales": {"2025-12-31": value}}}, "2025-12-31"
+    )
+
+
 def test_sync_retries_transient_symbol_failure(monkeypatch, tmp_path: Path) -> None:
     class FakeClient:
         def __init__(self, **_kwargs):

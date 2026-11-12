@@ -86,6 +86,8 @@ Writes:
 - `ranked_signals.csv`
 - `ranked_universe.csv`
 - `breakout_scan.csv`
+- `breakout_review_scan.csv` in every market stage; review-only, never consumed
+  by candidates, events, or execution
 - `pattern_scan.csv`
 - `stock_scan.csv`
 - `sector_dashboard.csv`

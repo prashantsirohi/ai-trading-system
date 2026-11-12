@@ -42,6 +42,7 @@ Under `data/pipeline_runs/<run_id>/rank/attempt_<n>/`:
 | `ranked_signals` | `ranked_signals.csv` | `StockRanker.rank_all` → `service.py:511` |
 | `volume_shockers` | `volume_shockers.csv` | `domains/ranking/volume_shocker.py::detect_volume_shockers` (`service.py:570`) |
 | `breakout_scan` | `breakout_scan.csv` | `domains/ranking/breakout.py::scan_breakouts` (`service.py:595`) |
+| `breakout_review_scan` | `breakout_review_scan.csv` | Separate review-only observations in every market stage, without the operational top-25 cap. |
 | `pattern_scan` | `pattern_scan.csv` | `domains/ranking/patterns/` + `analytics/patterns/build_pattern_signals` (`service.py:426`–`427`) |
 | `stage1_scan` | `stage1_scan.csv` | Canonical research-only maturity/eligibility scan. Score bands remain diagnostic; operational substates and promotion require structural eligibility. |
 | `early_accumulation_scan` | `early_accumulation_scan.csv` | Compatibility output feeding the Stage-1 model during migration. |
@@ -123,7 +124,13 @@ Before final rank artifacts are emitted, the rank stage transactionally upserts 
    - volume shockers → `volume_shockers.csv`
    - `breakout_scan` (one scan per ranked exchange using `ranked_universe` as
      scoring context; a true S4 market records
-     `skipped: disabled_by_market_stage:S4` and emits an empty artifact)
+     `skipped: disabled_by_market_stage:S4` and emits an empty artifact; an
+     independent `breakout_review_scan` runs in every market stage without the
+     top-25 cap. It preserves raw breakout-v2 score and setup quality before
+     market-stage adjustments, retains the actual stage as context and labels
+     results review-only. Operational scores and gates remain unchanged. The
+     exchange's exact requested session must exist or the
+     review task fails.)
    - `pattern_scan` (one seed/scan lifecycle per ranked exchange, with ranked-symbol fallback)
    - `stock_scan` (integrated view via `build_integrated_stock_scan_view`)
    - `sector_dashboard`
@@ -221,6 +228,9 @@ workers, and commits a resumable checkpoint after every completed date.
 - [`fundamentals`](./fundamentals.md) — reads `ranked_signals` and writes alongside under `rank/attempt_<n>/`.
 - [`candidates`](./candidates.md) — requires `ranked_signals` (hard), optionally reads `breakout_scan`, `pattern_scan`, `sector_dashboard`, plus `fundamentals.watchlist_candidates`.
 - [`events`](./events.md) — reads `breakout_scan` (Tier A/B) and `volume_shockers`.
+- `breakout_review_scan` is attempt-scoped evidence only. It feeds the optional
+  Google Sheets review tab, not candidates, events or execution; its completed/empty/failed
+  task status distinguishes an empty result from a failed scan.
 - `execute`, `insight`, `narrative`, `publish` — consume `ranked_signals` and/or `dashboard_payload` indirectly via the candidates/events outputs. The Google Sheets daily report may use ranked rows from the full-universe `stock_scan` to fill its operator-only top-25 view; this does not widen the regime-aware execution shortlist.
 - Execution independently defaults to `execution_exchanges=[NSE]`. Including
   BSE in analytical ranking does not widen broker placement unless the operator
