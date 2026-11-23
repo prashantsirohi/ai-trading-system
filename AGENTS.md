@@ -14,7 +14,8 @@ Do not rediscover pipeline order, runtime paths, persistence ownership, artifact
 
 The default work branch is `main`.
 
-- Do not create, switch to, or push a feature branch unless the operator explicitly requests a branch or PR workflow.
+- Never create a branch (local or remote) unless the operator explicitly tells you to in that request. Words like "commit", "push", "merge" or "ship it" do not authorize a new branch.
+- Do not switch to or push a feature branch unless the operator explicitly requests a branch or PR workflow. This applies to agent-created and worktree-created branches too: "commit and push" means commit and push to `main`, not to the worktree's branch.
 - When asked to push without another branch being named, push the current `main` to `origin/main`.
 - Before code changes, run `git status --short --branch`. If the checkout is not on `main`, stop and ask.
 - Preserve unrelated changes in a dirty worktree.
