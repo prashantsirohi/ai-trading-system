@@ -165,3 +165,21 @@ and matching pattern session dates. Missing, failed, or invalid inputs leave the
 previous sheet intact. If the tab has data beyond K, publication refuses to
 reorder rows so manual annotations cannot silently attach to another symbol.
 Local publishing does not write Sheets.
+
+## Decision tab
+
+The optional `google_sheets_decision` channel (`publish_optional`) refreshes
+the front `00_Decision` tab from the same verified daily-review pack that gates
+the pilot, plus the rank `dashboard_payload` summary. It is registered only
+when `daily_review_ready` is true and runs after the pilot so it keeps tab
+position 0. It re-ranks and scores nothing: sections keep daily-review
+`priority` order, display caps are 10 Entry-review and 10 Investigate rows, and
+lane agreement is a count of independent memberships. The verdict is `NO NEW
+BUYS` when `new_buys_allowed` is false, `CAUTION` when data trust is not
+`trusted`, the review is not `complete`, or market data is missing, else `GO`.
+The tab is fully generated and holds no operator input; notes stay on
+`00_Daily_Review_Pilot`. Its outcome-evidence section reads an optional
+`reports/daily_review_outcomes/queue_scoreboard.csv` produced by
+`python -m ai_trading_system.research.daily_review_outcomes`; when absent the
+tab states that no queue is validated. Source:
+`domains/publish/channels/decision.py`.

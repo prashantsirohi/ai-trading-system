@@ -175,9 +175,11 @@ def main(argv: list[str] | None = None) -> int:
     paths = get_domain_paths(data_domain=args.data_domain)
     board = build_scoreboard(paths.pipeline_runs_dir, paths.ohlcv_db_path)
     print(board.round(2).to_string(index=False))
-    if args.output_csv:
-        args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-        board.to_csv(args.output_csv, index=False)
+    # Default location is the one the 00_Decision publisher reads.
+    out = args.output_csv or paths.reports_dir / "daily_review_outcomes" / "queue_scoreboard.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    board.to_csv(out, index=False)
+    print(f"wrote {out}")
     return 0
 
 

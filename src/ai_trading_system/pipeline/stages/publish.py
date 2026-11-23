@@ -89,6 +89,7 @@ class PublishStage:
         "google_sheets_dashboard": "publish_optional",
         "google_sheets_final_review_pilot": "publish_optional",
         "google_sheets_daily_review_pilot": "publish_optional",
+        "google_sheets_decision": "publish_optional",
         "google_sheets_breakout_pattern_review": "publish_optional",
         "google_sheets_publish_log": "publish_optional",
         "quantstats_dashboard_tearsheet": "publish_of_record",
@@ -214,6 +215,7 @@ class PublishStage:
                         datasets.get("final_review_pilot_source_hashes") or []
                     ),
                     "google_sheets_daily_review_pilot": list(datasets.get("daily_review_source_hashes") or []),
+                    "google_sheets_decision": list(datasets.get("decision_source_hashes") or []),
                     "google_sheets_breakout_pattern_review": list(datasets.get("breakout_pattern_source_hashes") or []),
                 },
             },
@@ -635,6 +637,22 @@ class PublishStage:
         except Exception as exc:
             state.update(reason=str(exc))
 
+    def _attach_queue_evidence(self, context: StageContext, datasets: Dict[str, Any]) -> None:
+        """Optional outcome-by-queue scoreboard; absence leaves the tab saying so."""
+        datasets["decision_queue_evidence"] = None
+        datasets["decision_source_hashes"] = list(datasets.get("daily_review_source_hashes") or [])
+        try:
+            from ai_trading_system.pipeline.contracts import compute_file_hash
+            from ai_trading_system.platform.db.paths import get_domain_paths
+
+            paths = get_domain_paths(project_root=context.project_root, data_domain=context.params.get("data_domain", "operational"))
+            path = paths.reports_dir / "daily_review_outcomes" / "queue_scoreboard.csv"
+            if path.exists():
+                datasets["decision_queue_evidence"] = pd.read_csv(path, keep_default_na=False)
+                datasets["decision_source_hashes"].append(compute_file_hash(path))
+        except Exception:  # evidence is advisory; never block the tab
+            datasets["decision_queue_evidence"] = None
+
     def _attach_daily_review_data(self, context: StageContext, datasets: Dict[str, Any]) -> None:
         state = {"status": "disabled"}
         datasets["daily_review_state"] = state
@@ -668,6 +686,7 @@ class PublishStage:
                             daily_review_source_hashes=sorted(a.content_hash for a in artifacts))
             state.update(status="ready", source_status=summary["status"], rows=len(frames[0]),
                          source_run_id=context.run_id)
+            self._attach_queue_evidence(context, datasets)
         except Exception as exc:
             state.update(status="not_published", reason=str(exc))
 
@@ -826,6 +845,8 @@ class PublishStage:
             handlers["google_sheets_final_review_pilot"] = self._publish_final_review_pilot
         if datasets.get("daily_review_ready") is True:
             handlers["google_sheets_daily_review_pilot"] = self._publish_daily_review
+            # After the pilot so 00_Decision keeps the first tab position.
+            handlers["google_sheets_decision"] = self._publish_decision
         if datasets.get("breakout_pattern_review_ready") is True:
             handlers["google_sheets_breakout_pattern_review"] = self._publish_breakout_pattern_review
         has_fundamentals = any(
@@ -889,6 +910,13 @@ class PublishStage:
 
         return publish_daily_review(datasets["daily_review_rows"], datasets["daily_review_changes"],
                                     datasets["daily_review_summary"], run_id=context.run_id, run_date=context.run_date)
+
+    def _publish_decision(self, context, rank_artifact, datasets):
+        from ai_trading_system.domains.publish.channels.decision import publish_decision
+
+        return publish_decision(datasets["daily_review_rows"], datasets["daily_review_changes"],
+                                datasets["daily_review_summary"], datasets.get("dashboard_payload") or {},
+                                datasets.get("decision_queue_evidence"), run_id=context.run_id, run_date=context.run_date)
 
     def _publish_breakout_pattern_review(self, context, rank_artifact, datasets):
         from ai_trading_system.domains.publish.channels.google_sheets import publish_breakout_pattern_review
